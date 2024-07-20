@@ -4,6 +4,7 @@ import torch
 from diffusers import (
     AnimateDiffPipeline,
     DiffusionPipeline,
+    UNet3DConditionModel,
     LCMScheduler,
     MotionAdapter,
 )
@@ -15,8 +16,8 @@ def main():
     # "modelscopet2v-webvid", "modelscopet2v-laion", "modelscopet2v-anime",
     # "modelscopet2v-real", "modelscopet2v-3d-cartoon"]
     model_path = "modelscopet2v-laion"
-    prompts = ["A cat walking on a treadmill", "A dog walking on a treadmill"]
-    num_inference_steps = 40
+    prompts = ["Yellow and black tropical fish dart through the sea."]
+    num_inference_steps = 16
 
     model_id = "yhzhai/mcm"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -27,23 +28,26 @@ def main():
     else:
         raise ValueError(f"Unknown pipeline {model_path}")
     import os
-    lora = PeftModel.from_pretrained(
-        pipeline.unet,
-        "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_2/checkpoint-final/",
-        torch_device="cpu",
-    )
-    lora.merge_and_unload()
-    pipeline.unet = lora
+
+    lora = UNet3DConditionModel.from_pretrained(
+    "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_7/checkpoint-final",
+    torch_device="cpu")
+    unet = lora
+    # prev_train_unet = "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_7/checkpoint-final"
+    # iter_number = int(prev_train_unet.split("modelscopet2v_distillation_")[1].split("/checkpoint")[0])
+    # for ii in range(2, iter_number+1):
+    #     _prev_train_unet = prev_train_unet.split("modelscopet2v_distillation_")[0] + "modelscopet2v_distillation_" + str(ii) + "/checkpoint-final"
+    #     lora = PeftModel.from_pretrained(
+    #     unet,
+    #     _prev_train_unet,
+    #     torch_device="cpu")
+    #     lora.merge_and_unload()
+    #     unet = lora.base_model.model
+    # unet = unet
+    # unet.save_pretrained("/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_7_2/checkpoint-final")
+    pipeline.unet = unet
     
-    # pipeline.unet.load_adapter(
-    #                 "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation/mcm-test",
-    #                 "default", is_trainable=True, torch_device="cpu")
-    # lora_state_dict = get_peft_model_state_dict(pipeline.unet, adapter_name="default")
-    
-    # for k,v in lora_state_dict.items():
-    #     print(k,v.shape,v)
-    
-    pipeline = pipeline.to(device)
+    pipeline = pipeline.to(device,dtype=torch.float16)
     output = pipeline(
         prompt=prompts,
         num_frames=16,
@@ -51,6 +55,7 @@ def main():
         num_inference_steps=num_inference_steps,
         generator=torch.Generator("cpu").manual_seed(42),
     ).frames
+    
     if not isinstance(output, list):
         output = [output[i] for i in range(output.shape[0])]
 
@@ -104,13 +109,13 @@ def get_modelscope_pipeline():
     pipe = DiffusionPipeline.from_pretrained(
         model_id, torch_dtype=torch.float16, variant="fp16"
     )
-    # scheduler = LCMScheduler.from_pretrained(
-    #     model_id,
-    #     subfolder="scheduler",
-    #     timestep_scaling=4.0,
-    # )
-    # pipe.scheduler = scheduler
-    
+    import diffusers
+    scheduler = LCMScheduler.from_pretrained(
+        model_id,
+        subfolder="scheduler",
+        timestep_scaling=4.0,
+    )
+    pipe.scheduler = scheduler
     pipe.enable_vae_slicing()
 
     return pipe

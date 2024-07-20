@@ -1,11 +1,23 @@
+from typing import Optional
+
 import torch
-from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
-from diffusers.utils import export_to_video
+from diffusers import (
+    AnimateDiffPipeline,
+    DiffusionPipeline,
+    UNet3DConditionModel,
+    LCMScheduler,
+    MotionAdapter,
+)
+model_id = "emilianJR/epiCRealism"
+motion_module_path: str = "guoyww/animatediff-motion-adapter-v1-5-2"
 
-pipe = DiffusionPipeline.from_pretrained("damo-vilab/text-to-video-ms-1.7b", torch_dtype=torch.float16, variant="fp16")
-pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
-pipe.enable_model_cpu_offload()
-
+adapter = MotionAdapter.from_pretrained(
+    motion_module_path, torch_dtype=torch.float16
+)
+pipe = AnimateDiffPipeline.from_pretrained(
+    model_id,
+    motion_adapter=adapter,
+    torch_dtype=torch.float16,
+)
 prompt = "Spiderman is surfing"
 video_frames = pipe(prompt, num_inference_steps=25).frames
-video_path = export_to_video(video_frames)

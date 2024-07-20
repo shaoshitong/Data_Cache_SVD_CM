@@ -80,8 +80,10 @@ from utils.diffusion_misc import *
 from utils.dist import dist_init, dist_init_wo_accelerate, get_deepspeed_config
 from utils.misc import *
 from utils.wandb import setup_wandb
+from utils.lisa import LISADiffusion
 
 MAX_SEQ_LENGTH = 77
+torch.backends.cudnn.benchmark = True
 
 if is_wandb_available():
     import wandb
@@ -175,14 +177,21 @@ def main(args):
     accelerator_project_config = ProjectConfiguration(
         project_dir=args.output_dir, logging_dir=logging_dir
     )
+    from accelerate import DistributedDataParallelKwargs, ProfileKwargs
 
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    profile_kwargs = ProfileKwargs(
+        activities=["cuda"],
+        profile_memory=True,
+        record_shapes=True
+    )
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
         project_config=accelerator_project_config,
+        kwargs_handlers=[ddp_kwargs,profile_kwargs],
         split_batches=True,  # It's important to set this to True when using webdataset to get the right number of steps for lr scheduling. If set to False, the number of steps will be devide by the number of processes assuming batches are multiplied by the number of processes
-        # deepspeed_plugin=deepspeed_plugin,
     )
 
     total_batch_size = (
@@ -266,7 +275,7 @@ def main(args):
         timesteps=noise_scheduler.config.num_train_timesteps,
         ddim_timesteps=args.num_ddim_timesteps,
     )
-    normalize_fn = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)
+    
 
     # 7. Create online student U-Net. TAG-Pretrain
     # For whole model fine-tuning, this will be updated by the optimizer (e.g.,
@@ -314,29 +323,25 @@ def main(args):
         spatial_head = None
         target_spatial_head = None
 
-    # if args.prev_train_unet is not None and args.prev_train_unet != "None":
-    #     lora = UNet3DConditionModel.from_pretrained(
-    #     "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_1_lisa3/checkpoint-1000",
-    #     torch_device="cpu")
-    #     unet = lora
-        
-    #     iter_number = int(args.prev_train_unet.split("modelscopet2v_distillation_")[1].split("/checkpoint")[0])
-    #     for ii in range(2, iter_number+1):
-    #         prev_train_unet = args.prev_train_unet.split("modelscopet2v_distillation_")[0] + "modelscopet2v_distillation_" + str(ii) + "/checkpoint-final"
-            
-    #         lora = PeftModel.from_pretrained(
-    #         unet,
-    #         prev_train_unet,
-    #         torch_device="cpu")
-    #         lora.merge_and_unload()
-    #         unet = lora.base_model.model
-    #     print(f"Successfully load unet from {args.prev_train_unet}")
     if args.prev_train_unet is not None and args.prev_train_unet != "None":
         lora = UNet3DConditionModel.from_pretrained(
-        args.prev_train_unet,
+        "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_1_lisa3/checkpoint-1000",
         torch_device="cpu")
         unet = lora
+        
+        iter_number = int(args.prev_train_unet.split("modelscopet2v_distillation_")[1].split("/checkpoint")[0])
+        for ii in range(2, iter_number+1):
+            prev_train_unet = args.prev_train_unet.split("modelscopet2v_distillation_")[0] + "modelscopet2v_distillation_" + str(ii) + "/checkpoint-final"
+            
+            lora = PeftModel.from_pretrained(
+            unet,
+            prev_train_unet,
+            torch_device="cpu")
+            lora.merge_and_unload()
+            unet = lora.base_model.model
+
         print(f"Successfully load unet from {args.prev_train_unet}")
+
     unet.train()
     # Check that all trainable models are in full precision
     low_precision_error_string = (
@@ -350,68 +355,69 @@ def main(args):
         )
 
     # 8. Add LoRA to the student U-Net, only the LoRA projection matrix will be updated by the optimizer.
-    if args.use_lora:
-        if args.lora_target_modules is not None:
-            logger.warning(
-                "We are currently ignoring the `lora_target_modules` argument. As of now, LoRa does not support Conv3D layers."
-            )
-            lora_target_modules = [
-                module_key.strip() for module_key in args.lora_target_modules.split(",")
-            ]
-        else:
-            lora_target_modules = [
-                "to_q",
-                "to_k",
-                "to_v",
-                "to_out.0",
-                "proj_in",
-                "proj_out",
-                "ff.net.0.proj",
-                "ff.net.2",
-                "conv1",
-                "conv2",
-                "conv_shortcut",
-                "downsamplers.0.conv",
-                "upsamplers.0.conv",
-                "time_emb_proj",
-            ]
+    
+    # if args.use_lora:
+    #     if args.lora_target_modules is not None:
+    #         logger.warning(
+    #             "We are currently ignoring the `lora_target_modules` argument. As of now, LoRa does not support Conv3D layers."
+    #         )
+    #         lora_target_modules = [
+    #             module_key.strip() for module_key in args.lora_target_modules.split(",")
+    #         ]
+    #     else:
+    #         lora_target_modules = [
+    #             "to_q",
+    #             "to_k",
+    #             "to_v",
+    #             "to_out.0",
+    #             "proj_in",
+    #             "proj_out",
+    #             "ff.net.0.proj",
+    #             "ff.net.2",
+    #             "conv1",
+    #             "conv2",
+    #             "conv_shortcut",
+    #             "downsamplers.0.conv",
+    #             "upsamplers.0.conv",
+    #             "time_emb_proj",
+    #         ]
 
-        # Currently LoRA does not support Conv3D, thus removing the Conv3D
-        # layers from the list of target modules.
-        key_list = []
-        for name, module in unet.named_modules():
-            if any([name.endswith(module_key) for module_key in lora_target_modules]):
-                if args.base_model_name == "modelscope" and not (
-                    "temp" in name and "conv" in name
-                ):
-                    key_list.append(name)
-                elif args.base_model_name == "animatediff":
-                    key_list.append(name)
+    #     # Currently LoRA does not support Conv3D, thus removing the Conv3D
+    #     # layers from the list of target modules.
+    #     key_list = []
+    #     for name, module in unet.named_modules():
+    #         if any([name.endswith(module_key) for module_key in lora_target_modules]):
+    #             if args.base_model_name == "modelscope" and not (
+    #                 "temp" in name and "conv" in name
+    #             ):
+    #                 key_list.append(name)
+    #             elif args.base_model_name == "animatediff":
+    #                 key_list.append(name)
 
-        lora_config = LoraConfig(
-            r=args.lora_rank,
-            target_modules=key_list,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=args.lora_dropout,
-        )
-        unet = get_peft_model(unet, lora_config)
+    #     lora_config = LoraConfig(
+    #         r=args.lora_rank,
+    #         target_modules=key_list,
+    #         lora_alpha=args.lora_alpha,
+    #         lora_dropout=args.lora_dropout,
+    #     )
+    #     unet = get_peft_model(unet, lora_config)
 
-        if (
-            args.from_pretrained_unet is not None
-            and args.from_pretrained_unet != "None"
-        ):
-            # TODO currently only supports LoRA
-            logger.info(f"Loading pretrained UNet from {args.from_pretrained_unet}")
-            unet.load_adapter(
-                args.from_pretrained_unet,
-                "default",
-                is_trainable=True,
-                torch_device="cpu",
-            )
-        unet.print_trainable_parameters()
+    #     if (
+    #         args.from_pretrained_unet is not None
+    #         and args.from_pretrained_unet != "None"
+    #     ):
+    #         # TODO currently only supports LoRA
+    #         logger.info(f"Loading pretrained UNet from {args.from_pretrained_unet}")
+    #         unet.load_adapter(
+    #             args.from_pretrained_unet,
+    #             "default",
+    #             is_trainable=True,
+    #             torch_device="cpu",
+    #         )
+    #     unet.print_trainable_parameters()
         
-    else:
-        raise NotImplementedError
+    # else:
+    #     raise NotImplementedError
 
     # 9. Handle mixed precision and device placement
     # For mixed precision training we cast all non-trainable weigths to half-precision
@@ -440,12 +446,6 @@ def main(args):
             def save_model_hook(models, weights, output_dir):
                 if accelerator.is_main_process:
                     unet_ = accelerator.unwrap_model(unet)
-                    lora_state_dict = get_peft_model_state_dict(
-                        unet_, adapter_name="default"
-                    )
-                    StableDiffusionPipeline.save_lora_weights(
-                        os.path.join(output_dir, "unet_lora"), lora_state_dict
-                    )
                     # save weights in peft format to be able to load them back
                     unet_.save_pretrained(output_dir)
 
@@ -492,9 +492,7 @@ def main(args):
             def load_model_hook(models, input_dir):
                 # load the LoRA into the model
                 unet_ = accelerator.unwrap_model(unet)
-                unet_.load_adapter(
-                    input_dir, "default", is_trainable=True, torch_device="cpu"
-                )
+                unet_.from_pretrained(input_dir)
 
                 if args.cd_target in ["learn", "hlearn"]:
                     spatial_head_state_dict = load_file(
@@ -580,11 +578,11 @@ def main(args):
 
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
-    if args.allow_tf32:
-        torch.backends.cuda.matmul.allow_tf32 = True
+    # if args.allow_tf32:
+    #     torch.backends.cuda.matmul.allow_tf32 = True
 
     if args.gradient_checkpointing:
-        unet.enable_gradient_checkpointing()
+        pass # unet.enable_gradient_checkpointing()
 
     # Use 8-bit Adam for lower memory usage or to fine-tune the model in 16GB GPUs
     if args.use_8bit_adam:
@@ -599,33 +597,19 @@ def main(args):
     else:
         optimizer_class = torch.optim.AdamW
 
-    # 12. Optimizer creation
-    if args.cd_target in ["learn", "hlearn"]:
-        unet_params = [p for p in unet.parameters() if p.requires_grad] + list(spatial_head.parameters())
-    else:
-        unet_params = unet.parameters()
-
-    optimizer = optimizer_class(
-        unet_params,
-        lr=args.learning_rate,
-        betas=(args.adam_beta1, args.adam_beta2),
-        weight_decay=args.adam_weight_decay,
-        eps=args.adam_epsilon,
-    )
-
+    
     c_dim = 1024
-    if False:
-        discriminator_checkpoint = os.path.join(args.dis_output_dir, "checkpoint-discriminator-final")
-        discriminator_checkpoint = os.path.join(discriminator_checkpoint, "discriminator")
-        discriminator = Discriminator(
-            discriminator_checkpoint, True, feature_dim=c_dim
-        )  # TODO add dino name and patch size
-        logger.info(
-            f"\nLoaded pretrained discriminator from {discriminator_checkpoint}\n"
-        )
-        discriminator.eval()
-        discriminator = discriminator.to(accelerator.device, dtype=weight_dtype)
-        discriminator.requires_grad_(False)
+    # discriminator_checkpoint = os.path.join(args.dis_output_dir, "checkpoint-discriminator-final")
+    # discriminator_checkpoint = os.path.join(discriminator_checkpoint, "discriminator")
+    # discriminator = Discriminator(
+    #     discriminator_checkpoint, True, feature_dim=c_dim
+    # )  # TODO add dino name and patch size
+    # logger.info(
+    #     f"\nLoaded pretrained discriminator from {discriminator_checkpoint}\n"
+    # )
+    # discriminator.eval()
+    # discriminator = discriminator.to(accelerator.device, dtype=weight_dtype)
+    # discriminator.requires_grad_(False)
 
 
     WEBVID_DATA_SIZE = 2467378
@@ -654,37 +638,43 @@ def main(args):
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
+    lisa_trainer = LISADiffusion(unet, spatial_head, rate=0.15)
+    lisa_trainer.insert_hook(optimizer_class=optimizer_class,
+                        get_scheduler=get_scheduler,
+                        accelerator=accelerator,
+                        optim_kwargs=dict(lr=args.learning_rate,
+                                          betas=(args.adam_beta1, args.adam_beta2),
+                                          weight_decay=args.adam_weight_decay,
+                                          eps=args.adam_epsilon),
+                        sched_kwargs=dict(name=args.lr_scheduler,
+                                          num_warmup_steps=args.lr_warmup_steps,
+                                          num_training_steps=args.max_train_steps))
+    lisa_trainer.register(optimizer_class=optimizer_class,
+                        get_scheduler=get_scheduler,
+                        accelerator=accelerator,
+                        optim_kwargs=dict(lr=args.learning_rate,
+                                          betas=(args.adam_beta1, args.adam_beta2),
+                                          weight_decay=args.adam_weight_decay,
+                                          eps=args.adam_epsilon),
+                        sched_kwargs=dict(name=args.lr_scheduler,
+                                          num_warmup_steps=args.lr_warmup_steps,
+                                          num_training_steps=args.max_train_steps))
 
-    lr_scheduler = get_scheduler(
-        args.lr_scheduler,
-        optimizer=optimizer,
-        num_warmup_steps=args.lr_warmup_steps,
-        num_training_steps=args.max_train_steps,
-    )
-    lr_scheduler._step_count = args.scheduler_last_step
     # 15. Prepare for training
     # Prepare everything with our `accelerator`.
     if args.cd_target in ["learn", "hlearn"]:
         (
             unet,
             spatial_head,
-            optimizer,
-            lr_scheduler,
         ) = accelerator.prepare(
             unet,
             spatial_head,
-            optimizer,
-            lr_scheduler,
         )
     else:
         (
-            unet,
-            optimizer,
-            lr_scheduler,
+            unet
         ) = accelerator.prepare(
-            unet,
-            optimizer,
-            lr_scheduler,
+            unet
         )
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -724,7 +714,6 @@ def main(args):
     )
     global_step = 0
     first_epoch = 0
-    
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
         if args.resume_from_checkpoint != "latest":
@@ -773,19 +762,19 @@ def main(args):
 
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet):
+            with accelerator.accumulate(unet), accelerator.accumulate(spatial_head), accelerator.profile() as prof:
                 # 1. Load and process the image and text conditioning
                 noisy_model_input, target, clip_emb, gt_sample, \
                 gt_sample_clip_emb, prompt_embeds, pred_x_0, _, _, use_pred_x0, \
                 start_timesteps, timesteps = batch
                 
-                noisy_model_input = noisy_model_input.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
-                target = target.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
-                clip_emb = clip_emb.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
-                prompt_embeds = prompt_embeds.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
-                start_timesteps, timesteps = start_timesteps.to(device=accelerator.device, dtype=torch.int64, non_blocking=True).squeeze(0), \
-                    timesteps.to(device=accelerator.device, dtype=torch.int64, non_blocking=True).squeeze(0)
-                pred_x_0 = pred_x_0.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
+                noisy_model_input = noisy_model_input.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
+                target = target.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
+                clip_emb = clip_emb.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
+                prompt_embeds = prompt_embeds.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
+                start_timesteps, timesteps = start_timesteps.to(device=accelerator.device, dtype=torch.int64).squeeze(0), \
+                    timesteps.to(device=accelerator.device, dtype=torch.int64).squeeze(0)
+                pred_x_0 = pred_x_0.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
                 
                 # torch.Size([1, 4, 16, 64, 64]) torch.Size([1, 4, 16, 64, 64]) torch.Size([1, 1024]) torch.Size([2, 3, 512, 512]) torch.Size([1, 1024]) torch.Size([1, 77, 768])
 
@@ -848,53 +837,49 @@ def main(args):
                 loss_dict["loss_unet_cd"] = loss_unet_cd
                 loss_unet_total = loss_unet_cd
                 
-                loss_unet_pred_x0 = torch.mean(
-                        torch.sqrt(
-                            (pred_x_0.float() - pred_x_0_stu.float()) ** 2
-                            + args.huber_c**2
-                        )
-                        - args.huber_c
-                    )
-                loss_dict["loss_unet_pred_x0"] = loss_unet_pred_x0
-                loss_unet_total = loss_unet_total + (loss_unet_pred_x0 * 0.1)
+                # loss_unet_pred_x0 = torch.mean(
+                #         torch.sqrt(
+                #             (pred_x_0.float() - pred_x_0_stu.float()) ** 2
+                #             + args.huber_c**2
+                #         )
+                #         - args.huber_c
+                #     )
+                # loss_dict["loss_unet_pred_x0"] = loss_unet_pred_x0
+                # loss_unet_total = loss_unet_total + (loss_unet_pred_x0 * 0.1)
                 
                 # 10.2. Calculate discriminator loss
-                if False: # not args.no_disc:
-                    clip_emb = repeat(clip_emb, "b n -> b t n", t=noisy_model_input.shape[2])
-                    gen_clip_emb = rearrange(clip_emb, "b t n -> (b t) n")
-                    gen_latents = rearrange(model_pred, "b c t n m -> (b t) c n m")
-                    with torch.autocast("cuda", dtype=weight_dtype):
-                        disc_pred_gen = discriminator(gen_latents, gen_clip_emb)
-                        if args.disc_loss_type == "bce":
-                            pos_label = torch.ones_like(disc_pred_gen)
-                            loss_unet_adv = F.binary_cross_entropy_with_logits(
-                                disc_pred_gen, pos_label
-                            )
-                        elif args.disc_loss_type == "hinge":
-                            loss_unet_adv = -disc_pred_gen.mean() + 1
-                        elif args.disc_loss_type == "wgan":
-                            loss_unet_adv = torch.max(-torch.ones_like(disc_pred_gen), -disc_pred_gen).mean()
-                            # loss_unet_adv = -disc_pred_gen.mean()
-                        else:
-                            raise ValueError(
-                                f"Discriminator loss type {args.disc_loss_type} not supported."
-                            )
+                
+                # if not args.no_disc:
+                #     clip_emb = repeat(clip_emb, "b n -> b t n", t=noisy_model_input.shape[2])
+                #     gen_clip_emb = rearrange(clip_emb, "b t n -> (b t) n")
+                #     gen_latents = rearrange(model_pred, "b c t n m -> (b t) c n m")
+                #     with torch.autocast("cuda", dtype=weight_dtype):
+                #         disc_pred_gen = discriminator(gen_latents, gen_clip_emb)
+                #         if args.disc_loss_type == "bce":
+                #             pos_label = torch.ones_like(disc_pred_gen)
+                #             loss_unet_adv = F.binary_cross_entropy_with_logits(
+                #                 disc_pred_gen, pos_label
+                #             )
+                #         elif args.disc_loss_type == "hinge":
+                #             loss_unet_adv = -disc_pred_gen.mean() + 1
+                #         elif args.disc_loss_type == "wgan":
+                #             loss_unet_adv = torch.max(-torch.ones_like(disc_pred_gen), -disc_pred_gen).mean()
+                #             # loss_unet_adv = -disc_pred_gen.mean()
+                #         else:
+                #             raise ValueError(
+                #                 f"Discriminator loss type {args.disc_loss_type} not supported."
+                #             )
 
-                        loss_dict["loss_unet_adv"] = loss_unet_adv
-                    loss_unet_total = (
-                        loss_unet_total + args.disc_loss_weight * loss_unet_adv
-                    )
+                #         loss_dict["loss_unet_adv"] = loss_unet_adv
+                #     loss_unet_total = (
+                #         loss_unet_total + args.disc_loss_weight * loss_unet_adv
+                #     )
 
                 loss_dict["loss_unet_total"] = loss_unet_total
 
-                # 11. Backpropagate on the online student model (`unet`)
+                # 11. Backpropagate on the online student model (`u
+                # net`)
                 accelerator.backward(loss_unet_total)
-                if accelerator.sync_gradients and args.max_grad_norm > 0:
-                    accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
-
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 
@@ -905,6 +890,10 @@ def main(args):
                         args.ema_decay,
                     )
                 progress_bar.update(1)
+                if global_step % 20 == 0 and global_step != 0: # you can use other number to replace 6
+                    lisa_trainer.lisa_recall()
+                    if accelerator.is_main_process:
+                        print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=30))
                 global_step += 1
 
                 # according to https://github.com/huggingface/diffusers/issues/2606
@@ -958,8 +947,7 @@ def main(args):
                         logger.info(f"Failed to save state: {e}")
 
             logs = {
-                "unet_lr": lr_scheduler.get_last_lr()[0],
-                # "disc_lr": disc_lr_scheduler.get_last_lr()[0],
+                "unet_lr": list(lisa_trainer.optimizer_dict.values())[0].param_groups[0]["lr"],
                 "disc_r1_weight": args.disc_lambda_r1,
             }
             for loss_name, loss_value in loss_dict.items():
@@ -984,12 +972,6 @@ def main(args):
     if accelerator.is_main_process:
         unet = accelerator.unwrap_model(unet)
         if args.use_lora:
-            lora_state_dict = get_peft_model_state_dict(unet, adapter_name="default")
-            StableDiffusionPipeline.save_lora_weights(
-                os.path.join(args.output_dir, "checkpoint-final", "unet_lora"),
-                lora_state_dict,
-            )
-            unet.merge_and_unload()
             unet.save_pretrained(os.path.join(args.output_dir, "checkpoint-final"))
             if args.cd_target in ["learn", "hlearn"]:
                 spatial_head_ = accelerator.unwrap_model(spatial_head)

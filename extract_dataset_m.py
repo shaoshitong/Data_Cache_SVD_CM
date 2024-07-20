@@ -25,12 +25,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 
-import time
+import time,einops
 import accelerate
 import diffusers
 import numpy as np
 import open_clip
 import torch
+from utils.pickscore import PickScore
 import torch.nn.functional as F
 import torch.utils.checkpoint
 import transformers
@@ -311,7 +312,7 @@ def main(args):
         )
 
     # 5.2 Load sentence-level CLIP. TAG-Pretrain
-    open_clip_model, *_ = open_clip.create_model_and_transforms(
+    open_clip_model, _, preprocesses = open_clip.create_model_and_transforms(
         "ViT-g-14",
         pretrained="weights/open_clip_pytorch_model.bin",
     )
@@ -393,12 +394,11 @@ def main(args):
         print(
             f"trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param}"
         )
+    
     if args.prev_train_unet is not None and args.prev_train_unet != "None":
-        lora = PeftModel.from_pretrained(
-        unet,
+        lora = UNet3DConditionModel.from_pretrained(
         args.prev_train_unet,
         torch_device="cpu")
-        lora.merge_and_unload()
         unet = lora
         print(f"Successfully load unet from {args.prev_train_unet}")
     # Check that all trainable models are in full precision
@@ -597,7 +597,7 @@ def main(args):
         end = args.web_dataset_end,
     )
     train_dataloader = dataset.train_dataloader
-
+    
     if args.disc_gt_data == "webvid":
         disc_gt_dataloader = None
     elif args.disc_gt_data in ["laion", "disney", "realisticvision", "toonyou"]:
@@ -738,7 +738,6 @@ def main(args):
                 video, text = batch["video"], batch["text"]
                 video = video.to(accelerator.device, non_blocking=True)
                 encoded_text = compute_embeddings_fn(text)
-                
 
                 pixel_values = video.to(dtype=weight_dtype)
                 if vae.dtype != weight_dtype:
@@ -988,6 +987,20 @@ def main(args):
                     target = c_skip * x_prev + c_out * pred_x_0
 
                 store_dict["target"] = target
+                store_dict["pred_x_0"] = pred_x_0
+                pre_image = \
+                vae.decode(einops.rearrange(pred_x_0.half().cuda(),"b c t h w -> (b t) c h w")[5].unsqueeze(0) / vae.config.scaling_factor).sample
+                pre_image = pre_image[0].mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
+                pre_image = Image.fromarray(pre_image)
+                image_emb = open_clip_model.encode_image(preprocesses(pre_image).unsqueeze(0).to(accelerator.device))
+                image_features = image_emb / image_emb.norm(dim=-1, keepdim=True) 
+                text_features = clip_emb / clip_emb.norm(dim=-1, keepdim=True) 
+                text_probs = (100.0 * image_features @ text_features.T)
+                score = text_probs * max(start_timesteps.item() / solver.ddim_timesteps[-1], 0.5)
+                if score < 5:
+                    progress_bar.update(1)
+                    global_step += 1
+                    continue
                 
                 # get GT samples
                 if args.disc_gt_data == "webvid":

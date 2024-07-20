@@ -17,7 +17,7 @@ def main():
     # "modelscopet2v-real", "modelscopet2v-3d-cartoon"]
     model_path = "modelscopet2v-laion"
     prompts = ["A cat walking on a treadmill", "A dog walking on a treadmill"]
-    num_inference_steps = 36
+    num_inference_steps = 4
 
     model_id = "yhzhai/mcm"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -53,6 +53,7 @@ from diffusers import (
     UNet3DConditionModel,
     UNetMotionModel,
 )
+
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, export_to_video, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
@@ -71,7 +72,9 @@ from args import parse_args
 from dataset.webvid_dataset_wbd import Text2VideoDataset
 from dataset.data_cache_dataset import CustomDataset, DataLoaderX
 from models.discriminator_m import (
-    Discriminator
+    Discriminator,
+    UNet2DConditionModelwithEncoder,
+    UNet3DConditionModelwithEncoder
 )
 from models.spatial_head import IdentitySpatialHead, SpatialHead
 from utils.diffusion_misc import *
@@ -280,9 +283,6 @@ def main(args):
     ) 
     vae.requires_grad_(False)
     
-    # 6. Freeze teacher vae, text_encoder, and teacher_unet
-    normalize_fn = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)
-    
     # 8.1. Create discriminator for the student U-Net.
     c_dim = 1024
     if not args.dis_output_dir.endswith(".tar"):
@@ -331,6 +331,37 @@ def main(args):
     # Move the ODE solver to accelerator.device.
     solver = solver.to(accelerator.device)
 
+    # 7. Create online student U-Net. TAG-Pretrain
+    # For whole model fine-tuning, this will be updated by the optimizer (e.g.,
+    # via backpropagation.)
+    # Add `time_cond_proj_dim` to the student U-Net if `teacher_unet.config.time_cond_proj_dim` is None
+    if args.use_lora:
+        if args.base_model_name == "animatediff":
+            unet = UNet2DConditionModel.from_pretrained(
+                args.pretrained_teacher_model,
+                subfolder="unet",
+                revision=args.teacher_revision,
+            )
+            motion_adapter = MotionAdapter.from_pretrained(args.motion_adapter_path)
+            unet = UNetMotionModel.from_unet2d(unet, motion_adapter)
+        elif args.base_model_name == "modelscope":
+            unet = UNet3DConditionModelwithEncoder.from_pretrained(
+                args.pretrained_teacher_model,
+                subfolder="unet",
+                revision=args.teacher_revision,
+            )
+
+    if args.prev_train_unet is not None and args.prev_train_unet != "None":
+        lora = PeftModel.from_pretrained(
+        unet,
+        args.prev_train_unet,
+        torch_device="cpu")
+        lora.merge_and_unload()
+        unet = lora
+        print(f"Successfully load unet from {args.prev_train_unet}")
+        
+    unet.to(dtype=weight_dtype, device=accelerator.device)
+    unet.requires_grad_(False)
     # 10. Handle saving and loading of checkpoints
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
