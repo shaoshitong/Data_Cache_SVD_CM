@@ -15,8 +15,8 @@ def main():
     # select model_path from ["animatediff-laion", "animatediff-webvid",
     # "modelscopet2v-webvid", "modelscopet2v-laion", "modelscopet2v-anime",
     # "modelscopet2v-real", "modelscopet2v-3d-cartoon"]
-    model_path = "modelscopet2v-laion"
-    prompts = ["A cat walking on a treadmill", "A dog walking on a treadmill"]
+    model_path = "modelscopet2v-webvid"
+    prompts = ["A dog walking on a treadmill","Yellow and black tropical fish dart through the sea."]
     num_inference_steps = 4
 
     model_id = "yhzhai/mcm"

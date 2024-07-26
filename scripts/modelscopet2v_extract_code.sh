@@ -1,11 +1,7 @@
-#!/bin/bash
-
-# please set the following variables
 export VIDEO_DATA_PATH=/data/shared_data/Webvid-2M/
-
 export GPUS=8  # number of GPUs
-export MASTER_PORT=29500  # port for distributed training
-export RUN_NAME=modelscopet2v_extract_code_2  # name of the run
+export MASTER_PORT=29501  # port for distributed training
+export RUN_NAME=modelscopet2v_extract_code_5  # name of the run
 export OUTPUT_DIR=work_dirs/$RUN_NAME  # directory to save the model checkpoints
 
 accelerate launch --num_machines 1 --num_processes $GPUS \
@@ -19,7 +15,7 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --learning_rate=5e-6 \
     --loss_type="huber" \
     --adam_weight_decay=0.0 \
-    --dataloader_num_workers=4 \
+    --dataloader_num_workers=2 \
     --validation_steps=5000 \
     --checkpointing_steps=500 \
     --train_batch_size=1 \
@@ -51,7 +47,7 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --cd_pred_x0_portion 0.5 \
     --num_ddim_timesteps 50 \
     --resume_from_checkpoint latest \
-    --extract-code-dir /data/shaoshitong/extract_code_dir_scope_2/ \
-    --web-dataset-end 30 \
-    --prev_train_unet /home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_2/checkpoint-final \
-    --web-dataset-begin 20
+    --extract-code-dir /home/shaoshitong/extract_code_dir_scope_5/ \
+    --web-dataset-end 25 \
+    --web-dataset-begin 20 \
+    --prev_train_unet /home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_4/checkpoint-final

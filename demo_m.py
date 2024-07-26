@@ -16,8 +16,8 @@ def main():
     # "modelscopet2v-webvid", "modelscopet2v-laion", "modelscopet2v-anime",
     # "modelscopet2v-real", "modelscopet2v-3d-cartoon"]
     model_path = "modelscopet2v-laion"
-    prompts = ["Yellow and black tropical fish dart through the sea."]
-    num_inference_steps = 16
+    prompts = ["A dog walking on a treadmill","Yellow and black tropical fish dart through the sea."]
+    num_inference_steps = 4
 
     model_id = "yhzhai/mcm"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -30,12 +30,13 @@ def main():
     import os
 
     lora = UNet3DConditionModel.from_pretrained(
-    "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_7/checkpoint-final",
+    "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_14/checkpoint-final",
     torch_device="cpu")
     unet = lora
-    # prev_train_unet = "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_7/checkpoint-final"
+    
+    # prev_train_unet = "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_8/checkpoint-final"
     # iter_number = int(prev_train_unet.split("modelscopet2v_distillation_")[1].split("/checkpoint")[0])
-    # for ii in range(2, iter_number+1):
+    # for ii in range(8, iter_number+1):
     #     _prev_train_unet = prev_train_unet.split("modelscopet2v_distillation_")[0] + "modelscopet2v_distillation_" + str(ii) + "/checkpoint-final"
     #     lora = PeftModel.from_pretrained(
     #     unet,

@@ -400,6 +400,17 @@ def main(args):
         args.prev_train_unet,
         torch_device="cpu")
         unet = lora
+        
+        # iter_number = int(args.prev_train_unet.split("modelscopet2v_distillation_")[1].split("/checkpoint")[0])
+        # for ii in range(8, iter_number+1):
+        #     prev_train_unet = args.prev_train_unet.split("modelscopet2v_distillation_")[0] + "modelscopet2v_distillation_" + str(ii) + "/checkpoint-final"
+            
+        #     lora = PeftModel.from_pretrained(
+        #     unet,
+        #     prev_train_unet,
+        #     torch_device="cpu")
+        #     lora.merge_and_unload()
+        #     unet = lora.base_model.model
         print(f"Successfully load unet from {args.prev_train_unet}")
     # Check that all trainable models are in full precision
     low_precision_error_string = (
@@ -730,8 +741,17 @@ def main(args):
         disable=not accelerator.is_local_main_process,
     )
 
+    right_global_step = 0
+    
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
+            # if os.path.exists(os.path.join(rank_extract_code_dir,  'cache{:03d}.npz'.format(saved_data_idx))):
+            #     saved_data_idx += 1
+            #     progress_bar.update(1)
+            #     global_step += 1
+            #     continue 
+            if global_step % 500 == 0:
+                print("Pass Rate:",round(right_global_step*100/global_step,2),"%")
             store_dict = dict()
             with torch.no_grad():
                 # 1. Load and process the image and text conditioning
@@ -813,14 +833,6 @@ def main(args):
                     if args.cd_pred_x0_portion >= 0:
                         use_pred_x0 = random.random() < args.cd_pred_x0_portion
 
-                    if args.disc_gt_data == "webvid":
-                        pass
-                    else:
-                        gt_sample, gt_sample_caption = next(disc_gt_dataloader)
-                        if use_pred_x0 and args.disc_same_caption:
-                            text = gt_sample_caption
-                            encoded_text = compute_embeddings_fn(text)
-
                 # get CLIP embeddings, which is used for the adversarial loss
                 with torch.no_grad():
                     clip_text_token = open_clip_tokenizer(text).to(accelerator.device)
@@ -861,7 +873,25 @@ def main(args):
                                 alpha_schedule,
                                 sigma_schedule,
                             )
-
+                
+                ################### Data-Centric #####################
+                pre_image = \
+                vae.decode(einops.rearrange(latents.half().cuda(),"b c t h w -> (b t) c h w")[5].unsqueeze(0) / vae.config.scaling_factor).sample
+                pre_image = pre_image[0].mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
+                pre_image = Image.fromarray(pre_image)
+                image_emb = open_clip_model.encode_image(preprocesses(pre_image).unsqueeze(0).to(accelerator.device))
+                image_features = image_emb / image_emb.norm(dim=-1, keepdim=True) 
+                text_features = clip_emb / clip_emb.norm(dim=-1, keepdim=True) 
+                text_probs = (100.0 * image_features @ text_features.T)
+                score = text_probs * max(start_timesteps.item() / solver.ddim_timesteps[-1], 0.5)
+                
+                if score < 5:
+                    progress_bar.update(1)
+                    global_step += 1
+                    right_global_step += 1
+                    continue
+                ################### Data-Centric #####################
+                
                 noise = torch.randn_like(latents).to(dtype=weight_dtype)
                 noisy_model_input_list = []
                 for b_idx in range(bsz): # Add noise
@@ -988,44 +1018,6 @@ def main(args):
 
                 store_dict["target"] = target
                 store_dict["pred_x_0"] = pred_x_0
-                pre_image = \
-                vae.decode(einops.rearrange(pred_x_0.half().cuda(),"b c t h w -> (b t) c h w")[5].unsqueeze(0) / vae.config.scaling_factor).sample
-                pre_image = pre_image[0].mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
-                pre_image = Image.fromarray(pre_image)
-                image_emb = open_clip_model.encode_image(preprocesses(pre_image).unsqueeze(0).to(accelerator.device))
-                image_features = image_emb / image_emb.norm(dim=-1, keepdim=True) 
-                text_features = clip_emb / clip_emb.norm(dim=-1, keepdim=True) 
-                text_probs = (100.0 * image_features @ text_features.T)
-                score = text_probs * max(start_timesteps.item() / solver.ddim_timesteps[-1], 0.5)
-                if score < 5:
-                    progress_bar.update(1)
-                    global_step += 1
-                    continue
-                
-                # get GT samples
-                if args.disc_gt_data == "webvid":
-                    pixel_values = rearrange(
-                        pixel_values, "(b t) c h w -> b c t h w", t=args.num_frames
-                    )
-                    tsn_sample_indices = tsn_sample(
-                        args.num_frames, args.disc_tsn_num_frames
-                    )
-                    pixel_values = pixel_values[:, :, tsn_sample_indices]
-                    gt_sample = rearrange(pixel_values, "b c t h w -> (b t) c h w")
-                    gt_sample_clip_emb = clip_emb
-                else:
-                    gt_sample = gt_sample.to(
-                        accelerator.device, dtype=weight_dtype, non_blocking=True
-                    )
-                    with torch.no_grad():
-                        gt_sample_clip_text_token = open_clip_tokenizer(
-                            gt_sample_caption
-                        ).to(accelerator.device)
-                        gt_sample_clip_emb = open_clip_model.encode_text(
-                            gt_sample_clip_text_token
-                        )
-                store_dict["gt_sample"] = gt_sample
-                store_dict["gt_sample_clip_emb"] = gt_sample_clip_emb
                 store_dict["global_step"] = global_step
                 store_dict["local_rank"] = local_rank
                 

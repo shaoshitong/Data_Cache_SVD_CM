@@ -316,12 +316,12 @@ def main(args):
 
     # if args.prev_train_unet is not None and args.prev_train_unet != "None":
     #     lora = UNet3DConditionModel.from_pretrained(
-    #     "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_1_lisa3/checkpoint-1000",
+    #     "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_7/checkpoint-1000",
     #     torch_device="cpu")
     #     unet = lora
         
     #     iter_number = int(args.prev_train_unet.split("modelscopet2v_distillation_")[1].split("/checkpoint")[0])
-    #     for ii in range(2, iter_number+1):
+    #     for ii in range(8, iter_number+1):
     #         prev_train_unet = args.prev_train_unet.split("modelscopet2v_distillation_")[0] + "modelscopet2v_distillation_" + str(ii) + "/checkpoint-final"
             
     #         lora = PeftModel.from_pretrained(
@@ -642,7 +642,7 @@ def main(args):
                             shuffle=False,
                             sampler=sampler,
                             num_workers=args.dataloader_num_workers,
-                            pin_memory=False,
+                            pin_memory=True,
                             drop_last=True)
     
     # 14. LR Scheduler creation
@@ -775,8 +775,8 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
                 # 1. Load and process the image and text conditioning
-                noisy_model_input, target, clip_emb, gt_sample, \
-                gt_sample_clip_emb, prompt_embeds, pred_x_0, _, _, use_pred_x0, \
+                noisy_model_input, target, clip_emb, \
+                prompt_embeds, pred_x_0, _, _, use_pred_x0, \
                 start_timesteps, timesteps = batch
                 
                 noisy_model_input = noisy_model_input.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
@@ -984,13 +984,9 @@ def main(args):
     if accelerator.is_main_process:
         unet = accelerator.unwrap_model(unet)
         if args.use_lora:
-            lora_state_dict = get_peft_model_state_dict(unet, adapter_name="default")
-            StableDiffusionPipeline.save_lora_weights(
-                os.path.join(args.output_dir, "checkpoint-final", "unet_lora"),
-                lora_state_dict,
-            )
+            unet.save_pretrained(os.path.join(args.output_dir, "checkpoint-final2"))
             unet.merge_and_unload()
-            unet.save_pretrained(os.path.join(args.output_dir, "checkpoint-final"))
+            unet.base_model.model.save_pretrained(os.path.join(args.output_dir, "checkpoint-final"))
             if args.cd_target in ["learn", "hlearn"]:
                 spatial_head_ = accelerator.unwrap_model(spatial_head)
                 spatial_head_.save_pretrained(

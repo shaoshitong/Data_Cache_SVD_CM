@@ -45,25 +45,34 @@ class CustomDataset(Dataset):
         try:
             file = np.load(file_name)
             self.cache = file
+            noisy_model_input = file["noisy_model_input"]
+            target = file["target"]
+            clip_emb = file["clip_emb"]
+            prompt_embeds = file["prompt_embeds"]
+            pred_x_0 = file["pred_x_0"]
+            
+            global_step = file["global_step"]
+            local_rank = file["local_rank"]
+            use_pred_x0 = file["use_pred_x0"]
+            start_timesteps = file["start_timesteps"]
+            timesteps = file["timesteps"]
         except:
             print(file_name)
             file = self.cache if self.cache is not None else np.load(self.files[0])
-        noisy_model_input = file["noisy_model_input"]
-        target = file["target"]
-        clip_emb = file["clip_emb"]
-        gt_sample = file["gt_sample"]
-        gt_sample_clip_emb = file["gt_sample_clip_emb"]
-        prompt_embeds = file["prompt_embeds"]
-        pred_x_0 = file["pred_x_0"]
-        
-        global_step = file["global_step"]
-        local_rank = file["local_rank"]
-        use_pred_x0 = file["use_pred_x0"]
-        start_timesteps = file["start_timesteps"]
-        timesteps = file["timesteps"]
+            noisy_model_input = file["noisy_model_input"]
+            target = file["target"]
+            clip_emb = file["clip_emb"]
+            prompt_embeds = file["prompt_embeds"]
+            pred_x_0 = file["pred_x_0"]
+            
+            global_step = file["global_step"]
+            local_rank = file["local_rank"]
+            use_pred_x0 = file["use_pred_x0"]
+            start_timesteps = file["start_timesteps"]
+            timesteps = file["timesteps"]
+            
         return torch.from_numpy(noisy_model_input), torch.from_numpy(target), \
-               torch.from_numpy(clip_emb), torch.from_numpy(gt_sample), \
-               torch.from_numpy(gt_sample_clip_emb), torch.from_numpy(prompt_embeds), torch.from_numpy(pred_x_0), global_step, \
+               torch.from_numpy(clip_emb), torch.from_numpy(prompt_embeds), torch.from_numpy(pred_x_0), global_step, \
                 local_rank, int(use_pred_x0), start_timesteps, timesteps
 
 
@@ -78,12 +87,12 @@ if __name__ == "__main__":
     vae.requires_grad_(False)
     vae = vae.cuda()
     import einops
-    dataset = CustomDataset("/home/shaoshitong/extract_code_dir_scope_5/", [0,])
+    dataset = CustomDataset("/home/shaoshitong/extract_code_dir_scope_8/", [0,])
     results = []
     index = 0
     for data in dataset:
-        noisy_model_input, target, clip_emb, gt_sample, \
-        gt_sample_clip_emb, prompt_embeds, pred_x_0, global_step, local_rank, use_pred_x0, \
+        noisy_model_input, target, clip_emb, prompt_embeds, \ 
+        pred_x_0, global_step, local_rank, use_pred_x0, \
         start_timesteps, timesteps = data
         image = vae.decode(einops.rearrange(target.float().cuda(),"b c t h w -> (b t) c h w") / vae.config.scaling_factor).sample
         if index >= 64:
