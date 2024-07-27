@@ -91,8 +91,8 @@ if __name__ == "__main__":
     results = []
     index = 0
     for data in dataset:
-        noisy_model_input, target, clip_emb, prompt_embeds, \ 
-        pred_x_0, global_step, local_rank, use_pred_x0, \
+        noisy_model_input, target, clip_emb, prompt_embeds, \
+            pred_x_0, global_step, local_rank, use_pred_x0, \
         start_timesteps, timesteps = data
         image = vae.decode(einops.rearrange(target.float().cuda(),"b c t h w -> (b t) c h w") / vae.config.scaling_factor).sample
         if index >= 64:

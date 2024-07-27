@@ -29,10 +29,10 @@ def main():
         raise ValueError(f"Unknown pipeline {model_path}")
     import os
 
-    lora = UNet3DConditionModel.from_pretrained(
-    "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_14/checkpoint-final",
-    torch_device="cpu")
-    unet = lora
+    # lora = UNet3DConditionModel.from_pretrained(
+    # "/data/shaoshitong/mcm_work_dirs/modelscopet2v_distillation_1_lisa3/checkpoint-1000",
+    # torch_device="cpu")
+    # unet = lora
     
     # prev_train_unet = "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_8/checkpoint-final"
     # iter_number = int(prev_train_unet.split("modelscopet2v_distillation_")[1].split("/checkpoint")[0])
@@ -46,7 +46,7 @@ def main():
     #     unet = lora.base_model.model
     # unet = unet
     # unet.save_pretrained("/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_7_2/checkpoint-final")
-    pipeline.unet = unet
+    # pipeline.unet = unet
     
     pipeline = pipeline.to(device,dtype=torch.float16)
     output = pipeline(

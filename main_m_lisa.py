@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import List, Optional, Union
 import time
 
+from pytorch_memlab import MemReporter
+from contextlib import redirect_stdout
 import accelerate
 import diffusers
 import numpy as np
@@ -180,17 +182,18 @@ def main(args):
     from accelerate import DistributedDataParallelKwargs, ProfileKwargs
 
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-    profile_kwargs = ProfileKwargs(
-        activities=["cuda"],
-        profile_memory=True,
-        record_shapes=True
-    )
+    # profile_kwargs = ProfileKwargs(
+    #     activities=["cuda"],
+    #     profile_memory=True,
+    #     record_shapes=True,
+    #     output_trace_dir="./output.json"
+    # )
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
         project_config=accelerator_project_config,
-        kwargs_handlers=[ddp_kwargs,profile_kwargs],
+        kwargs_handlers=[ddp_kwargs],
         split_batches=True,  # It's important to set this to True when using webdataset to get the right number of steps for lr scheduling. If set to False, the number of steps will be devide by the number of processes assuming batches are multiplied by the number of processes
     )
 
@@ -328,18 +331,6 @@ def main(args):
         "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_1_lisa3/checkpoint-1000",
         torch_device="cpu")
         unet = lora
-        
-        iter_number = int(args.prev_train_unet.split("modelscopet2v_distillation_")[1].split("/checkpoint")[0])
-        for ii in range(2, iter_number+1):
-            prev_train_unet = args.prev_train_unet.split("modelscopet2v_distillation_")[0] + "modelscopet2v_distillation_" + str(ii) + "/checkpoint-final"
-            
-            lora = PeftModel.from_pretrained(
-            unet,
-            prev_train_unet,
-            torch_device="cpu")
-            lora.merge_and_unload()
-            unet = lora.base_model.model
-
         print(f"Successfully load unet from {args.prev_train_unet}")
 
     unet.train()
@@ -353,7 +344,8 @@ def main(args):
         raise ValueError(
             f"Controlnet loaded as datatype {accelerator.unwrap_model(unet).dtype}. {low_precision_error_string}"
         )
-
+    
+    reporter = MemReporter(accelerator.unwrap_model(unet))
     # 8. Add LoRA to the student U-Net, only the LoRA projection matrix will be updated by the optimizer.
     
     # if args.use_lora:
@@ -638,7 +630,7 @@ def main(args):
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
-    lisa_trainer = LISADiffusion(unet, spatial_head, rate=0.15)
+    lisa_trainer = LISADiffusion(unet, spatial_head, rate=0.175)
     lisa_trainer.insert_hook(optimizer_class=optimizer_class,
                         get_scheduler=get_scheduler,
                         accelerator=accelerator,
@@ -762,10 +754,11 @@ def main(args):
 
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet), accelerator.accumulate(spatial_head), accelerator.profile() as prof:
+            with accelerator.accumulate(unet), accelerator.accumulate(spatial_head):
+                
                 # 1. Load and process the image and text conditioning
-                noisy_model_input, target, clip_emb, gt_sample, \
-                gt_sample_clip_emb, prompt_embeds, pred_x_0, _, _, use_pred_x0, \
+                noisy_model_input, target, clip_emb, \
+                prompt_embeds, pred_x_0, _, _, use_pred_x0, \
                 start_timesteps, timesteps = batch
                 
                 noisy_model_input = noisy_model_input.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
@@ -779,6 +772,7 @@ def main(args):
                 # torch.Size([1, 4, 16, 64, 64]) torch.Size([1, 4, 16, 64, 64]) torch.Size([1, 1024]) torch.Size([2, 3, 512, 512]) torch.Size([1, 1024]) torch.Size([1, 77, 768])
 
                 # 3. Get boundary scalings for start_timesteps and (end) timesteps.
+            
                 c_skip_start, c_out_start = scalings_for_boundary_conditions(
                     start_timesteps, timestep_scaling=args.timestep_scaling_factor
                 )
@@ -836,49 +830,14 @@ def main(args):
                     )
                 loss_dict["loss_unet_cd"] = loss_unet_cd
                 loss_unet_total = loss_unet_cd
-                
-                # loss_unet_pred_x0 = torch.mean(
-                #         torch.sqrt(
-                #             (pred_x_0.float() - pred_x_0_stu.float()) ** 2
-                #             + args.huber_c**2
-                #         )
-                #         - args.huber_c
-                #     )
-                # loss_dict["loss_unet_pred_x0"] = loss_unet_pred_x0
-                # loss_unet_total = loss_unet_total + (loss_unet_pred_x0 * 0.1)
-                
-                # 10.2. Calculate discriminator loss
-                
-                # if not args.no_disc:
-                #     clip_emb = repeat(clip_emb, "b n -> b t n", t=noisy_model_input.shape[2])
-                #     gen_clip_emb = rearrange(clip_emb, "b t n -> (b t) n")
-                #     gen_latents = rearrange(model_pred, "b c t n m -> (b t) c n m")
-                #     with torch.autocast("cuda", dtype=weight_dtype):
-                #         disc_pred_gen = discriminator(gen_latents, gen_clip_emb)
-                #         if args.disc_loss_type == "bce":
-                #             pos_label = torch.ones_like(disc_pred_gen)
-                #             loss_unet_adv = F.binary_cross_entropy_with_logits(
-                #                 disc_pred_gen, pos_label
-                #             )
-                #         elif args.disc_loss_type == "hinge":
-                #             loss_unet_adv = -disc_pred_gen.mean() + 1
-                #         elif args.disc_loss_type == "wgan":
-                #             loss_unet_adv = torch.max(-torch.ones_like(disc_pred_gen), -disc_pred_gen).mean()
-                #             # loss_unet_adv = -disc_pred_gen.mean()
-                #         else:
-                #             raise ValueError(
-                #                 f"Discriminator loss type {args.disc_loss_type} not supported."
-                #             )
-
-                #         loss_dict["loss_unet_adv"] = loss_unet_adv
-                #     loss_unet_total = (
-                #         loss_unet_total + args.disc_loss_weight * loss_unet_adv
-                #     )
-
                 loss_dict["loss_unet_total"] = loss_unet_total
 
                 # 11. Backpropagate on the online student model (`u
                 # net`)
+                # if accelerator.is_main_process and global_step % 100 == 0 and global_step != 0:
+                #     with open('memory_report.txt', 'a+') as f:
+                #         with redirect_stdout(f):
+                #             reporter.report(device=accelerator.device)
                 accelerator.backward(loss_unet_total)
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -892,8 +851,11 @@ def main(args):
                 progress_bar.update(1)
                 if global_step % 20 == 0 and global_step != 0: # you can use other number to replace 6
                     lisa_trainer.lisa_recall()
-                    if accelerator.is_main_process:
-                        print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=30))
+                    accelerator.clear()
+                    if accelerator.is_main_process and global_step != 0:
+                        with open('memory_report.txt', 'a+') as f:
+                            with redirect_stdout(f):
+                                reporter.report(device=accelerator.device)
                 global_step += 1
 
                 # according to https://github.com/huggingface/diffusers/issues/2606

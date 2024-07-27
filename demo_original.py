@@ -1,23 +1,11 @@
-from typing import Optional
-
+from diffusers import StableDiffusionPipeline
 import torch
-from diffusers import (
-    AnimateDiffPipeline,
-    DiffusionPipeline,
-    UNet3DConditionModel,
-    LCMScheduler,
-    MotionAdapter,
-)
-model_id = "emilianJR/epiCRealism"
-motion_module_path: str = "guoyww/animatediff-motion-adapter-v1-5-2"
 
-adapter = MotionAdapter.from_pretrained(
-    motion_module_path, torch_dtype=torch.float16
-)
-pipe = AnimateDiffPipeline.from_pretrained(
-    model_id,
-    motion_adapter=adapter,
-    torch_dtype=torch.float16,
-)
-prompt = "Spiderman is surfing"
-video_frames = pipe(prompt, num_inference_steps=25).frames
+model_id = "runwayml/stable-diffusion-v1-5"
+pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
+pipe = pipe.to("cuda")
+
+prompt = "a photo of an astronaut riding a horse on mars"
+image = pipe(prompt).images[0]  
+    
+image.save("astronaut_rides_horse.png")

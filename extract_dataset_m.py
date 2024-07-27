@@ -751,7 +751,7 @@ def main(args):
             #     global_step += 1
             #     continue 
             if global_step % 500 == 0:
-                print("Pass Rate:",round(right_global_step*100/global_step,2),"%")
+                print("Pass Rate:",round(right_global_step*100/(global_step+1e-3),2),"%")
             store_dict = dict()
             with torch.no_grad():
                 # 1. Load and process the image and text conditioning
