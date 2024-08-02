@@ -1,9 +1,3 @@
-export VIDEO_DATA_PATH=/data/shared_data/Webvid-2M/
-export GPUS=8  # number of GPUs
-export MASTER_PORT=29501  # port for distributed training
-export RUN_NAME=modelscopet2v_extract_code_5  # name of the run
-export OUTPUT_DIR=work_dirs/$RUN_NAME  # directory to save the model checkpoints
-
 accelerate launch --num_machines 1 --num_processes $GPUS \
     --main_process_port $MASTER_PORT --mixed_precision=fp16 \
     extract_dataset_m.py \
@@ -47,7 +41,7 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --cd_pred_x0_portion 0.5 \
     --num_ddim_timesteps 50 \
     --resume_from_checkpoint latest \
-    --extract-code-dir /home/shaoshitong/extract_code_dir_scope_5/ \
-    --web-dataset-end 25 \
-    --web-dataset-begin 20 \
-    --prev_train_unet /home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_4/checkpoint-final
+    --extract-code-dir $EXPORT_DIR \
+    --web-dataset-end $END \
+    --web-dataset-begin $BEGIN \
+    --prev_train_unet $PREV_TRAIN_UNET

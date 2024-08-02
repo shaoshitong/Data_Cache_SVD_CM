@@ -74,7 +74,7 @@ from transformers import AutoTokenizer, CLIPTextModel, PretrainedConfig
 from args import parse_args
 from dataset.webvid_dataset_wbd import Text2VideoDataset
 from dataset.data_cache_dataset import CustomDataset, DataLoaderX
-from models.discriminator_m import (
+from discriminator.unet_D import (
     Discriminator,
 )
 from models.spatial_head import IdentitySpatialHead, SpatialHead
@@ -278,7 +278,13 @@ def main(args):
         timesteps=noise_scheduler.config.num_train_timesteps,
         ddim_timesteps=args.num_ddim_timesteps,
     )
-    
+
+    discriminator = Discriminator()
+    if args.dis_output_dir is not None:
+        discriminator.load_state_dict(torch.load(args.dis_output_dir, map_location="cpu"))
+    logger.info(
+        f"\nhLoaded pretrained discriminator from {args.dis_output_dir}\n"
+    )
 
     # 7. Create online student U-Net. TAG-Pretrain
     # For whole model fine-tuning, this will be updated by the optimizer (e.g.,
@@ -328,7 +334,7 @@ def main(args):
 
     if args.prev_train_unet is not None and args.prev_train_unet != "None":
         lora = UNet3DConditionModel.from_pretrained(
-        "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_1_lisa3/checkpoint-1000",
+        args.prev_train_unet,
         torch_device="cpu")
         unet = lora
         print(f"Successfully load unet from {args.prev_train_unet}")
@@ -355,6 +361,9 @@ def main(args):
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
+    discriminator.to(device=accelerator.device, dtype=weight_dtype)
+    discriminator.requires_grad_(False)
+    
     if args.cd_target in ["learn", "hlearn"]:
         target_spatial_head.to(accelerator.device)
 
@@ -524,20 +533,6 @@ def main(args):
     else:
         optimizer_class = torch.optim.AdamW
 
-    
-    c_dim = 1024
-    # discriminator_checkpoint = os.path.join(args.dis_output_dir, "checkpoint-discriminator-final")
-    # discriminator_checkpoint = os.path.join(discriminator_checkpoint, "discriminator")
-    # discriminator = Discriminator(
-    #     discriminator_checkpoint, True, feature_dim=c_dim
-    # )  # TODO add dino name and patch size
-    # logger.info(
-    #     f"\nLoaded pretrained discriminator from {discriminator_checkpoint}\n"
-    # )
-    # discriminator.eval()
-    # discriminator = discriminator.to(accelerator.device, dtype=weight_dtype)
-    # discriminator.requires_grad_(False)
-
 
     WEBVID_DATA_SIZE = 2467378
     local_rank = torch.distributed.get_rank()
@@ -565,7 +560,7 @@ def main(args):
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
-    lisa_trainer = LISADiffusion(unet, spatial_head, rate=0.175)
+    lisa_trainer = LISADiffusion(unet, spatial_head, rate=0.2)
     lisa_trainer.insert_hook(optimizer_class=optimizer_class,
                         get_scheduler=get_scheduler,
                         accelerator=accelerator,
@@ -707,7 +702,7 @@ def main(args):
                 # torch.Size([1, 4, 16, 64, 64]) torch.Size([1, 4, 16, 64, 64]) torch.Size([1, 1024]) torch.Size([2, 3, 512, 512]) torch.Size([1, 1024]) torch.Size([1, 77, 768])
 
                 # 3. Get boundary scalings for start_timesteps and (end) timesteps.
-                
+            
                 c_skip_start, c_out_start = scalings_for_boundary_conditions(
                     start_timesteps, timestep_scaling=args.timestep_scaling_factor
                 )
@@ -765,6 +760,61 @@ def main(args):
                     )
                 loss_dict["loss_unet_cd"] = loss_unet_cd
                 loss_unet_total = loss_unet_cd
+
+                loss_unet_pred_x0 = torch.mean(
+                        torch.sqrt(
+                            (model_pred.float() - target.float()) ** 2
+                            + args.huber_c**2
+                        )
+                        - args.huber_c
+                    )
+                loss_dict["loss_unet_pred_x0"] = loss_unet_pred_x0
+                loss_unet_total = loss_unet_total + (loss_unet_pred_x0 * 0.1)
+                
+                if not args.no_disc:
+                    gen_latents = rearrange(model_pred, "b c t n m -> (b t) c n m")
+                    sd_prompt_embeds = sd_prompt_embeds.expand(gen_latents.shape[0],-1,-1)                 
+                    index = torch.randint(
+                        0, args.num_ddim_timesteps, (gen_latents.shape[0],), device=gen_latents.device
+                    ).long()
+                    _start_timesteps = solver.ddim_timesteps[index]
+                    _noise = torch.randn_like(gen_latents).to(dtype=weight_dtype)
+                
+                    gen_noisy_model_input_list = []
+                    for b_idx in range(gen_latents.shape[0]): # Add noise
+                        if index[b_idx] != args.num_ddim_timesteps - 1:
+                            gen_noisy_model_input = noise_scheduler.add_noise(
+                                gen_latents[b_idx, None],
+                                _noise[b_idx, None],
+                                _start_timesteps[b_idx, None],
+                            )
+                        else:
+                            gen_noisy_model_input = _noise[b_idx, None]
+                        gen_noisy_model_input_list.append(gen_noisy_model_input)
+                    gen_noisy = torch.cat(gen_noisy_model_input_list, dim=0).half()
+                    with torch.autocast("cuda", dtype=weight_dtype):
+                        disc_pred_gen = discriminator(gen_noisy, _start_timesteps, sd_prompt_embeds)
+                        if args.disc_loss_type == "bce":
+                            pos_label = torch.ones_like(disc_pred_gen)
+                            loss_unet_adv = F.binary_cross_entropy_with_logits(
+                                disc_pred_gen, pos_label
+                            )
+                        elif args.disc_loss_type == "hinge":
+                            loss_unet_adv = -disc_pred_gen.mean() + 1
+                        elif args.disc_loss_type == "wgan":
+                            loss_unet_adv = torch.max(-torch.ones_like(disc_pred_gen), -disc_pred_gen).mean()
+                            # loss_unet_adv = -disc_pred_gen.mean()
+                        else:
+                            raise ValueError(
+                                f"Discriminator loss type {args.disc_loss_type} not supported."
+                            )
+
+                        loss_dict["loss_unet_adv"] = loss_unet_adv
+                    loss_unet_total = (
+                        loss_unet_total + args.disc_loss_weight * loss_unet_adv
+                    )
+
+
                 loss_dict["loss_unet_total"] = loss_unet_total
                 accelerator.backward(loss_unet_total)
             # Checks if the accelerator has performed an optimization step behind the scenes
@@ -777,7 +827,7 @@ def main(args):
                         args.ema_decay,
                     )
                 progress_bar.update(1)
-                if global_step % 20 == 0 and global_step != 0: # you can use other number to replace 6
+                if global_step % 10 == 0 and global_step != 0: # you can use other number to replace 6
                     lisa_trainer.lisa_recall()
                     accelerator.clear()
                 global_step += 1

@@ -29,7 +29,7 @@ class LISADiffusion:
         for i, j in enumerate(self.allowed_index):
             self.probability[j-1] = (0.999 ** i)
             if any([(module_key in name_sort[j-1]) for module_key in lisa_target_name]):
-                self.probability[j-1] *= 4.
+                self.probability[j-1] *= 10.
         p_sum = sum(self.probability)
         self.probability = [j/p_sum for j in self.probability]
         self.initialize()
@@ -73,7 +73,7 @@ class LISADiffusion:
         param_number = len(list(self.model.parameters()))
         lisa_p = 8 / param_number if self.rate is None else self.rate
         self.lisa(model=self.model,p=lisa_p)
-        self.last_epoch += 20
+        self.last_epoch += 10
         # count = 0
         # for p in self.model.parameters():
         #     if (id(p) in self.optimizer_dict) and (count != 0 or count!=len(list(self.model.parameters()))-1):
@@ -169,7 +169,7 @@ class LISADiffusion:
                         self.scheduler_dict[id(p)] = accelerator.prepare_scheduler(self.scheduler_dict[id(p)])
 
             if accelerator is not None and accelerator.sync_gradients:
-                torch.nn.utils.clip_grad_norm_(p, 1.0)
+                torch.nn.utils.clip_grad_norm_(p, 10.0)
             
             self.optimizer_dict[id(p)].step()
             self.optimizer_dict[id(p)].zero_grad(set_to_none=True)

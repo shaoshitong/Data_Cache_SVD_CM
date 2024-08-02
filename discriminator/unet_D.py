@@ -83,7 +83,8 @@ def unet_forward(
 
 
 class Discriminator(nn.Module):
-    def __init__(self, pretrained_path, is_multiscale=True):
+    def __init__(self, pretrained_path="runwayml/stable-diffusion-v1-5", is_multiscale=True,
+                 type="modelscope"):
         super().__init__()
         self.unet = UNet2DConditionModel.from_pretrained(pretrained_path, subfolder="unet").to(torch.float16)
         for u in self.unet.parameters():
@@ -111,7 +112,10 @@ class Discriminator(nn.Module):
                                             nn.Conv2d(feat_c//4,1,1,1,0)
                                             ))
         self.heads = nn.ModuleList(self.heads)
-        self.dis = nn.Linear(1403, 1)
+        if type == "modelscope":
+            self.dis = nn.Linear(379, 1)
+        else:
+            self.dis = nn.Linear(1403, 1)
 
         
     def forward(self, latent, timesteps, encoder_hidden_states):
@@ -133,7 +137,7 @@ class Discriminator(nn.Module):
 
 if __name__ == "__main__":
     discriminator = Discriminator(pretrained_path="runwayml/stable-diffusion-v1-5").cuda()
-    latent, timesteps, encoder_hidden_states = torch.randn(2, 4, 64, 64), 1, torch.randn(2, 77, 768)
+    latent, timesteps, encoder_hidden_states = torch.randn(2, 4, 32, 32), 1, torch.randn(2, 77, 1024)
     latent, timesteps, encoder_hidden_states = latent.cuda().to(dtype=torch.float16), timesteps, encoder_hidden_states.cuda().to(dtype=torch.float16)
     outputs = discriminator(latent, timesteps, encoder_hidden_states)
     print(outputs.shape)

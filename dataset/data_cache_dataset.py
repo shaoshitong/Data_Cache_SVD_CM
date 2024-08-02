@@ -47,33 +47,28 @@ class CustomDataset(Dataset):
             self.cache = file
             noisy_model_input = file["noisy_model_input"]
             target = file["target"]
-            clip_emb = file["clip_emb"]
+            sd_prompt_embeds = file["sd_prompt_embeds"]
             prompt_embeds = file["prompt_embeds"]
-            pred_x_0 = file["pred_x_0"]
-            
-            global_step = file["global_step"]
-            local_rank = file["local_rank"]
-            use_pred_x0 = file["use_pred_x0"]
             start_timesteps = file["start_timesteps"]
             timesteps = file["timesteps"]
+            text = str(file["text"][0])
         except:
-            print(file_name)
             file = self.cache if self.cache is not None else np.load(self.files[0])
             noisy_model_input = file["noisy_model_input"]
             target = file["target"]
-            clip_emb = file["clip_emb"]
+            sd_prompt_embeds = file["sd_prompt_embeds"]
             prompt_embeds = file["prompt_embeds"]
-            pred_x_0 = file["pred_x_0"]
-            
-            global_step = file["global_step"]
-            local_rank = file["local_rank"]
-            use_pred_x0 = file["use_pred_x0"]
             start_timesteps = file["start_timesteps"]
             timesteps = file["timesteps"]
+            text = str(file["text"][0])
             
-        return torch.from_numpy(noisy_model_input), torch.from_numpy(target), \
-               torch.from_numpy(clip_emb), torch.from_numpy(prompt_embeds), torch.from_numpy(pred_x_0), global_step, \
-                local_rank, int(use_pred_x0), start_timesteps, timesteps
+        return dict(noisy_model_input=torch.from_numpy(noisy_model_input), 
+                    target=torch.from_numpy(target),
+                    sd_prompt_embeds=torch.from_numpy(sd_prompt_embeds),
+                    prompt_embeds=torch.from_numpy(prompt_embeds),
+                    start_timesteps=start_timesteps, 
+                    timesteps=timesteps, 
+                    text=text)
 
 
 

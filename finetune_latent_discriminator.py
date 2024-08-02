@@ -42,16 +42,8 @@ from diffusers import (
     AutoencoderKL,
     DDIMScheduler,
     DDPMScheduler,
-    DiffusionPipeline,
     DPMSolverMultistepScheduler,
-    EulerAncestralDiscreteScheduler,
-    LCMScheduler,
-    MotionAdapter,
-    StableDiffusionPipeline,
-    TextToVideoSDPipeline,
-    UNet2DConditionModel,
-    UNet3DConditionModel,
-    UNetMotionModel,
+    DiffusionPipeline
 )
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, export_to_video, is_wandb_available
@@ -70,14 +62,13 @@ from transformers import AutoTokenizer, CLIPTextModel, PretrainedConfig
 from args import parse_args
 from dataset.webvid_dataset_wbd import Text2VideoDataset
 from dataset.data_cache_dataset import CustomDataset, DataLoaderX
-from models.discriminator_m import (
-    Discriminator
-)
+
 from models.spatial_head import IdentitySpatialHead, SpatialHead
 from utils.diffusion_misc import *
 from utils.dist import dist_init, dist_init_wo_accelerate, get_deepspeed_config
 from utils.misc import *
 from utils.wandb import setup_wandb
+from discriminator.unet_D import Discriminator
 
 MAX_SEQ_LENGTH = 77
 
@@ -157,7 +148,11 @@ def get_predicted_noise(model_output, timesteps, sample, prediction_type, alphas
 
     return pred_epsilon
 
-
+def load_stable_diffusion_xl(device):
+    pipe = DiffusionPipeline.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float16, use_safetensors=True, variant="fp16")
+    pipe = pipe.to(device=device)
+    return pipe
+    
 def main(args):
     # torch.multiprocessing.set_sharing_strategy("file_system")
     dist_init()
@@ -237,8 +232,7 @@ def main(args):
         logger.error(f"Failed to wait for everyone: {e}")
         dist_init_wo_accelerate()
         accelerator.wait_for_everyone()
-
-    # 1. Create the noise scheduler and the desired noise schedule.
+    
     try:
         noise_scheduler = DDPMScheduler.from_pretrained(
             args.pretrained_teacher_model,
@@ -261,15 +255,12 @@ def main(args):
         )
 
     # DDPMScheduler calculates the alpha and sigma noise schedules (based on the alpha bars) for us
-    alpha_schedule = torch.sqrt(noise_scheduler.alphas_cumprod)
-    sigma_schedule = torch.sqrt(1 - noise_scheduler.alphas_cumprod)
     # Initialize the DDIM ODE solver for distillation.
     solver = DDIMSolver(
         noise_scheduler.alphas_cumprod.numpy(),
         timesteps=noise_scheduler.config.num_train_timesteps,
         ddim_timesteps=args.num_ddim_timesteps,
-    )
-    
+    ).to(accelerator.device)
     # 3. Load text encoders from SD 1.X/2.X checkpoint.
     # import correct text encoder classes
     
@@ -282,37 +273,30 @@ def main(args):
     
     # 6. Freeze teacher vae, text_encoder, and teacher_unet
     normalize_fn = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)
+    discriminator = Discriminator()
     
-    # 8.1. Create discriminator for the student U-Net.
-    c_dim = 1024
-    if not args.dis_output_dir.endswith(".tar"):
-        discriminator_checkpoint = os.path.join(args.dis_output_dir, "checkpoint-discriminator-final")
-        discriminator_checkpoint = os.path.join(discriminator_checkpoint, "discriminator")
-    else:
-        discriminator_checkpoint = args.dis_output_dir
-    discriminator = Discriminator(
-        discriminator_checkpoint, True, feature_dim=c_dim
-    )  # TODO add dino name and patch size
+    # def decrement_number_in_path(path):
+    #     import re
+    #     pattern = re.compile(r'(\d+)')
+        
+    #     def replace_with_decrement(match):
+    #         number = int(match.group(0)) - 1
+    #         return str(number)
+
+    #     updated_path = re.sub(pattern, replace_with_decrement, path)
+
+    #     return updated_path
+    # args.dis_output_dir = decrement_number_in_path(args.dis_output_dir)
+    
+    if args.dis_output_dir is not None:
+        discriminator.load_state_dict(torch.load(args.dis_output_dir))
     logger.info(
-        f"\nhLoaded pretrained discriminator from {discriminator_checkpoint}\n"
+        f"\nhLoaded pretrained discriminator from {args.dis_output_dir}\n"
     )
-    if args.from_pretrained_disc is not None and args.from_pretrained_disc != "None":
-        try:
-            disc_state_dict = load_file(
-                os.path.join(
-                    args.from_pretrained_disc,
-                    "discriminator",
-                    "diffusion_pytorch_model.safetensors",
-                )
-            )
-            discriminator.load_state_dict(disc_state_dict)
-            logger.info(
-                f"\nLoaded pretrained discriminator from {args.from_pretrained_disc}\n"
-            )
-        except Exception as e:
-            logger.error(f"Failed to load pretrained discriminator: {e}")
     discriminator.train()
     
+    inference_sd_model = load_stable_diffusion_xl(accelerator.device)
+    inference_sd_model.scheduler = DPMSolverMultistepScheduler.from_config(inference_sd_model.scheduler.config)
     # 9. Handle mixed precision and device placement
     # For mixed precision training we cast all non-trainable weigths to half-precision
     # as these weights are only used for inference, keeping weights in full precision is not required.
@@ -325,12 +309,9 @@ def main(args):
     vae.to(accelerator.device)
     if vae.dtype != weight_dtype:
         vae.to(dtype=weight_dtype)
-    # Also move the alpha and sigma noise schedules to accelerator.device.
-    alpha_schedule = alpha_schedule.to(accelerator.device)
-    sigma_schedule = sigma_schedule.to(accelerator.device)
-    # Move the ODE solver to accelerator.device.
-    solver = solver.to(accelerator.device)
-
+    inference_sd_model.to(accelerator.device)
+    inference_sd_model.enable_xformers_memory_efficient_attention()
+    
     # 10. Handle saving and loading of checkpoints
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
@@ -339,7 +320,7 @@ def main(args):
             if accelerator.is_main_process:
                 discriminator_ = accelerator.unwrap_model(discriminator)
                 torch.save(discriminator_.state_dict(),
-                    os.path.join(output_dir, "discriminator")
+                    os.path.join(output_dir, "discriminator.pth")
                 )
                 for _, model in enumerate(models):
                     # make sure to pop weight so that corresponding model is not saved again
@@ -350,8 +331,7 @@ def main(args):
             disc_state_dict = load_file(
                 os.path.join(
                     input_dir,
-                    "discriminator",
-                    "diffusion_pytorch_model.safetensors",
+                    "discriminator.pth",
                 )
             )
             disc_ = accelerator.unwrap_model(discriminator)
@@ -371,7 +351,7 @@ def main(args):
         torch.backends.cuda.matmul.allow_tf32 = True
     
     optimizer_class = torch.optim.AdamW
-    discriminator_params = list(discriminator.parameters())
+    discriminator_params = list(filter(lambda x:x.requires_grad, discriminator.parameters()))
     optimizer = optimizer_class(
         discriminator_params,
         lr=args.disc_learning_rate,
@@ -464,18 +444,17 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(discriminator), torch.autograd.set_detect_anomaly(True):
                 # 1. Load and process the image and text conditioning
-                noisy_model_input, target, clip_emb, gt_sample, \
-                gt_sample_clip_emb, prompt_embeds, pred_x_0, _, _, use_pred_x0, \
-                start_timesteps, timesteps = batch
+                noisy_model_input, target, sd_prompt_embeds, \
+                prompt_embeds, start_timesteps, \
+                timesteps, text = batch["noisy_model_input"], batch["target"], \
+                    batch["sd_prompt_embeds"], batch["prompt_embeds"], batch["start_timesteps"], \
+                    batch["timesteps"], batch["text"]
                 
                 noisy_model_input = noisy_model_input.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
                 target = target.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
-                clip_emb = clip_emb.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
-                gt_sample = gt_sample.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
-                gt_sample_clip_emb = gt_sample_clip_emb.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
+                sd_prompt_embeds = sd_prompt_embeds.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
                 start_timesteps, timesteps = start_timesteps.squeeze(0), timesteps.squeeze(0)
-                pred_x_0 = pred_x_0.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
-                
+                   
                 # 3. Get boundary scalings for start_timesteps and (end) timesteps.
                 c_skip_start, c_out_start = scalings_for_boundary_conditions(
                     start_timesteps, timestep_scaling=args.timestep_scaling_factor
@@ -491,29 +470,51 @@ def main(args):
                 loss_dict = {}
                 gt_latents = []
                 with torch.no_grad():
-                    for i in range(0, gt_sample.shape[0], args.vae_encode_batch_size):
-                        gt_latents.append(
-                            vae.encode(
-                                gt_sample[i : i + args.vae_encode_batch_size]
-                            ).latent_dist.sample()
-                        )
-                    gt_latents = torch.cat(gt_latents, dim=0)
-                    gt_latents = gt_latents * vae.config.scaling_factor
+                    gt_latent = inference_sd_model(prompt=text, height=256, width=256, output_type="latent",num_inference_steps=20).images[0]              
+                    for i in range(0, target.shape[0]*target.shape[2], 1):
+                        gt_latents.append(gt_latent)
+                    gt_latents = torch.stack(gt_latents, dim=0)
+                    gt_latents = gt_latents
                     gt_latents = gt_latents.to(weight_dtype)
                     gen_latents = target
-                    clip_emb = repeat(
-                        clip_emb, "b n -> b t n", t=noisy_model_input.shape[2]
-                    )
-                    gen_clip_emb = rearrange(clip_emb, "b t n -> (b t) n")
-                    gt_sample_clip_emb = repeat(
-                        gt_sample_clip_emb, "b n -> b t n", t=gt_latents.shape[0]
-                    )
-                    gt_sample_clip_emb = rearrange(gt_sample_clip_emb, "b t n -> (b t) n")
-                    gen_latents = rearrange(gen_latents, "b c t n m -> (b t) c n m")
-                    weight = 0.5 # gen_clip_emb.shape[0] / (gen_clip_emb.shape[0] + gt_sample_clip_emb.shape[0])
-                b1,b2 = gt_latents.shape[0],gen_latents.shape[0]
-                disc_pred = discriminator(torch.cat([gt_latents,gen_latents],0), torch.cat([gt_sample_clip_emb,gen_clip_emb],0))
-                disc_pred_gt, disc_pred_gen = torch.split(disc_pred,[b1,b2],dim=0)
+                    gen_latents = rearrange(gen_latents, "b c t h w -> (b t) c h w")
+                    weight = 0.5
+                
+                    index = torch.randint(
+                        0, args.num_ddim_timesteps, (gt_latents.shape[0],), device=gt_latents.device
+                    ).long()
+                    start_timesteps = solver.ddim_timesteps[index]
+                    
+                    noise = torch.randn_like(gt_latents).to(dtype=weight_dtype)
+                    gt_noisy_model_input_list = []
+                    gen_noisy_model_input_list = []
+                    for b_idx in range(gt_latents.shape[0]): # Add noise
+                        if index[b_idx] != args.num_ddim_timesteps - 1:
+                            gt_noisy_model_input = noise_scheduler.add_noise(
+                                gt_latents[b_idx, None],
+                                noise[b_idx, None],
+                                start_timesteps[b_idx, None],
+                            )
+                            gen_noisy_model_input = noise_scheduler.add_noise(
+                                gen_latents[b_idx, None],
+                                noise[b_idx, None],
+                                start_timesteps[b_idx, None],
+                            )
+                        else:
+                            # hard swap input to pure noise to ensure zero terminal SNR
+                            gt_noisy_model_input = noise[b_idx, None]
+                            gen_noisy_model_input = noise[b_idx, None]
+                        gt_noisy_model_input_list.append(gt_noisy_model_input)
+                        gen_noisy_model_input_list.append(gen_noisy_model_input)
+                        
+                    gt_noisy = torch.cat(gt_noisy_model_input_list, dim=0).half()                       
+                    gen_noisy = torch.cat(gen_noisy_model_input_list, dim=0).half()                       
+                sd_prompt_embeds = sd_prompt_embeds.expand(gt_noisy.shape[0],-1,-1)
+                b1, b2 = gt_noisy.shape[0], gen_noisy.shape[0]
+                disc_pred = discriminator(torch.cat([gt_noisy, gen_noisy],0), 
+                                          torch.cat([start_timesteps,start_timesteps],0), 
+                                          torch.cat([sd_prompt_embeds, sd_prompt_embeds],0))
+                disc_pred_gt, disc_pred_gen = torch.split(disc_pred,[b1, b2],dim=0)
             
                 if args.disc_loss_type == "bce":
                     pos_label = torch.ones_like(disc_pred_gt)

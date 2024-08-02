@@ -16,7 +16,8 @@ def main():
     # "modelscopet2v-webvid", "modelscopet2v-laion", "modelscopet2v-anime",
     # "modelscopet2v-real", "modelscopet2v-3d-cartoon"]
     model_path = "modelscopet2v-laion"
-    prompts = ["A dog walking on a treadmill","Yellow and black tropical fish dart through the sea."]
+    prompts = ["Spiderman is surfing",
+               "Slow pan upward of blazing oak fire in an indoor fireplace"]
     num_inference_steps = 4
 
     model_id = "yhzhai/mcm"
@@ -29,24 +30,11 @@ def main():
         raise ValueError(f"Unknown pipeline {model_path}")
     import os
 
-    # lora = UNet3DConditionModel.from_pretrained(
-    # "/data/shaoshitong/mcm_work_dirs/modelscopet2v_distillation_1_lisa3/checkpoint-1000",
-    # torch_device="cpu")
-    # unet = lora
-    
-    # prev_train_unet = "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_8/checkpoint-final"
-    # iter_number = int(prev_train_unet.split("modelscopet2v_distillation_")[1].split("/checkpoint")[0])
-    # for ii in range(8, iter_number+1):
-    #     _prev_train_unet = prev_train_unet.split("modelscopet2v_distillation_")[0] + "modelscopet2v_distillation_" + str(ii) + "/checkpoint-final"
-    #     lora = PeftModel.from_pretrained(
-    #     unet,
-    #     _prev_train_unet,
-    #     torch_device="cpu")
-    #     lora.merge_and_unload()
-    #     unet = lora.base_model.model
-    # unet = unet
-    # unet.save_pretrained("/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_7_2/checkpoint-final")
-    # pipeline.unet = unet
+    lora = UNet3DConditionModel.from_pretrained(
+    "./work_dirs/modelscopet2v_distillation_15/checkpoint-final",
+    torch_device="cpu")
+    unet = lora
+    pipeline.unet = unet
     
     pipeline = pipeline.to(device,dtype=torch.float16)
     output = pipeline(
@@ -54,7 +42,7 @@ def main():
         num_frames=16,
         guidance_scale=1.0,
         num_inference_steps=num_inference_steps,
-        generator=torch.Generator("cpu").manual_seed(42),
+        generator=torch.Generator("cpu").manual_seed(50),
     ).frames
     
     if not isinstance(output, list):
@@ -63,7 +51,7 @@ def main():
     for j in range(len(prompts)):
         export_to_video(
             output[j],
-            f"{j}-{model_path}.mp4",
+            f"{j}-14.mp4",
             fps=7,
         )
 

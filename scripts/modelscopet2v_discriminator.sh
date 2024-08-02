@@ -1,19 +1,6 @@
-#!/bin/bash
-
-# please set the following variables
-pkill python
-pkill wandb
-export DIS_RUN_NAME=modelscopet2v_discriminator # name of the run
-export VIDEO_DATA_PATH=/path/to/video/data
-export DIS_OUTPUT_DIR=work_dirs/$DIS_RUN_NAME
-export GPUS=8  # number of GPUs
-export MASTER_PORT=29501  # port for distributed training
-export RUN_NAME=modelscopet2v_discriminator_1  # name of the run
-export OUTPUT_DIR=work_dirs/$RUN_NAME  # directory to save the model checkpoints
-
 accelerate launch --num_machines 1 --num_processes $GPUS \
     --main_process_port $MASTER_PORT --mixed_precision=fp16 \
-    finetune_discriminator_m.py \
+    finetune_latent_discriminator.py \
     --base_model_name=modelscope \
     --output_dir=$OUTPUT_DIR \
     --mixed_precision=fp16 \
@@ -54,7 +41,5 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --cd_pred_x0_portion 0.5 \
     --num_ddim_timesteps 50 \
     --resume_from_checkpoint latest \
-    --extract-code-dir /home/shaoshitong/extract_code_dir_scope_1/ \
-    --dis_output_dir "/home/shaoshitong/project/mcm/checkpoint/pretrain_discriminator_m_imagenet_code42/discriminator.pth.tar"
-    
-# $DIS_OUTPUT_DIR
+    --extract-code-dir $EXPORT_DIR \
+    --dis_output_dir $DIS_OUTPUT_DIR

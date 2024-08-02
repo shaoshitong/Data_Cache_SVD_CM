@@ -159,6 +159,21 @@ def get_predicted_noise(model_output, timesteps, sample, prediction_type, alphas
 
     return pred_epsilon
 
+
+def load_stable_diffusion(device,dtype):
+    pipe = DiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16, use_safetensors=True, variant="fp16")
+    pipe = pipe.to(device=device,dtype=dtype)
+    del pipe.unet
+    
+    def compute_embeddings(
+        prompt_batch
+    ):
+        prompt_embeds = pipe.encode_prompt(
+            prompt_batch, device,1, True)[0]
+        return prompt_embeds
+
+    return compute_embeddings
+    
 def main(args):
     # torch.multiprocessing.set_sharing_strategy("file_system")
     dist_init()
@@ -400,18 +415,8 @@ def main(args):
         args.prev_train_unet,
         torch_device="cpu")
         unet = lora
-        
-        # iter_number = int(args.prev_train_unet.split("modelscopet2v_distillation_")[1].split("/checkpoint")[0])
-        # for ii in range(8, iter_number+1):
-        #     prev_train_unet = args.prev_train_unet.split("modelscopet2v_distillation_")[0] + "modelscopet2v_distillation_" + str(ii) + "/checkpoint-final"
-            
-        #     lora = PeftModel.from_pretrained(
-        #     unet,
-        #     prev_train_unet,
-        #     torch_device="cpu")
-        #     lora.merge_and_unload()
-        #     unet = lora.base_model.model
         print(f"Successfully load unet from {args.prev_train_unet}")
+    
     # Check that all trainable models are in full precision
     low_precision_error_string = (
         " Please make sure to always have all model weights in full float32 precision when starting training - even if"
@@ -706,7 +711,7 @@ def main(args):
         max_length=77,
     ).input_ids.to(accelerator.device)
     uncond_prompt_embeds = text_encoder(uncond_input_ids)[0]
-    
+    stable_v15_encode_prompt = load_stable_diffusion(dtype=weight_dtype,device=accelerator.device)
     # Memory 22G per single GPU
     
     # 16. Through Train to Save Data!
@@ -751,14 +756,15 @@ def main(args):
             #     global_step += 1
             #     continue 
             if global_step % 500 == 0:
-                print("Pass Rate:",round(right_global_step*100/(global_step+1e-3),2),"%")
+                print("Pass Rate:",round((global_step-right_global_step)*100/(global_step+1e-3),2),"%")
             store_dict = dict()
             with torch.no_grad():
                 # 1. Load and process the image and text conditioning
                 video, text = batch["video"], batch["text"]
                 video = video.to(accelerator.device, non_blocking=True)
                 encoded_text = compute_embeddings_fn(text)
-
+                store_dict["text"] = text
+                
                 pixel_values = video.to(dtype=weight_dtype)
                 if vae.dtype != weight_dtype:
                     vae.to(dtype=weight_dtype)
@@ -837,11 +843,11 @@ def main(args):
                 with torch.no_grad():
                     clip_text_token = open_clip_tokenizer(text).to(accelerator.device)
                     clip_emb = open_clip_model.encode_text(clip_text_token)
-
-                store_dict["clip_emb"] = clip_emb
+                    sd_prompt_embeds = stable_v15_encode_prompt(text).to(accelerator.device)
                 # 5. Prepare prompt embeds and unet_added_conditions
                 prompt_embeds = encoded_text.pop("prompt_embeds")
                 store_dict["prompt_embeds"] = prompt_embeds
+                store_dict["sd_prompt_embeds"] = sd_prompt_embeds
 
                 # 6. Sample noise from the prior and add it to the latents according to the noise magnitude at each
                 # timestep (this is the forward diffusion process) [z_{t_{n + k}} in Algorithm 1]
@@ -1015,11 +1021,7 @@ def main(args):
                         sigma_schedule,
                     )
                     target = c_skip * x_prev + c_out * pred_x_0
-
                 store_dict["target"] = target
-                store_dict["pred_x_0"] = pred_x_0
-                store_dict["global_step"] = global_step
-                store_dict["local_rank"] = local_rank
                 
                 for key in store_dict.keys():
                     if isinstance(store_dict[key], torch.Tensor):

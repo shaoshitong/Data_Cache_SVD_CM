@@ -48,18 +48,3 @@ class PickScore:
             probs = torch.softmax(scores, dim=-1)
         
         return probs.cpu().tolist(), scores
-
-
-
-if __name__ == "__main__":
-    pil_images = [Image.open("dpok_case_study_images/ori_四匹狼在公园里.png"), 
-                Image.open("dpok_case_study_images/ori_一只狗在月球上.png"), 
-                Image.open("dpok_case_study_images/ori_一只绿色的兔子.png"), 
-                Image.open("dpok_case_study_images/ori_一只猫和一只狗.png")]
-    prompt = "四匹狼在公园里, 一只狗在月球上, 一只绿色的兔子, 一只猫和一只狗"
-    print(calc_probs(prompt, pil_images))
-
-    pil_images = [Image.open("generated_case_study_imgaes/多概念_case_study_images/multi_concept_fine_tune_MoD_0804_五粮液.png")]
-    prompt = "五粮液"
-    print(calc_probs(prompt, pil_images))
-
