@@ -7,14 +7,15 @@ import gc
 import accelerate
 
 class LISADiffusion:
-    def __init__(self, model, spatial_head, rate=None, dtype=torch.float16, 
+    def __init__(self, model, spatial_head=None, rate=None, dtype=torch.float16, 
                  grad_aware=False, accelerator=None):
         self.model = model
         self.spatial_head = spatial_head
         self.dtype = dtype
         self.grad_aware = grad_aware
-        for param in self.spatial_head.parameters():
-            param.requires_grad = True
+        if self.spatial_head is not None:
+            for param in self.spatial_head.parameters():
+                param.requires_grad = True
         self.rate = rate
         self.accelerator = accelerator
         self.last_epoch = 0
@@ -125,17 +126,18 @@ class LISADiffusion:
                 if accelerator is not None:
                     self.scheduler_dict[id(p)] = accelerator.prepare_scheduler(self.scheduler_dict[id(p)])
         
-        for p in self.spatial_head.parameters():
-            if p.requires_grad:
-                self.optimizer_dict[id(p)] = optimizer_class([{"params":p}], **optim_kwargs)
-                if accelerator is not None:
-                    self.optimizer_dict[id(p)] = accelerator.prepare_optimizer(self.optimizer_dict[id(p)])
+        if self.spatial_head is not None:
+            for p in self.spatial_head.parameters():
+                if p.requires_grad:
+                    self.optimizer_dict[id(p)] = optimizer_class([{"params":p}], **optim_kwargs)
+                    if accelerator is not None:
+                        self.optimizer_dict[id(p)] = accelerator.prepare_optimizer(self.optimizer_dict[id(p)])
 
-        for p in self.spatial_head.parameters():
-            if p.requires_grad:
-                self.scheduler_dict[id(p)] = get_scheduler(optimizer=self.optimizer_dict[id(p)], **sched_kwargs)
-                if accelerator is not None:
-                    self.scheduler_dict[id(p)] = accelerator.prepare_scheduler(self.scheduler_dict[id(p)])
+            for p in self.spatial_head.parameters():
+                if p.requires_grad:
+                    self.scheduler_dict[id(p)] = get_scheduler(optimizer=self.optimizer_dict[id(p)], **sched_kwargs)
+                    if accelerator is not None:
+                        self.scheduler_dict[id(p)] = accelerator.prepare_scheduler(self.scheduler_dict[id(p)])
     
     def insert_hook(self, optimizer_class=None, get_scheduler=None, accelerator=None, 
                  optim_kwargs={}, sched_kwargs={}):
@@ -185,10 +187,11 @@ class LISADiffusion:
             self.optimizer_dict[id(p)].zero_grad(set_to_none=True)
             self.scheduler_dict[id(p)].step()
         
-        for p in self.spatial_head.parameters():
-            if p.requires_grad:
-                p.register_post_accumulate_grad_hook(spatial_optimizer_hook)
-          
+        if self.spatial_head is not None:
+            for p in self.spatial_head.parameters():
+                if p.requires_grad:
+                    p.register_post_accumulate_grad_hook(spatial_optimizer_hook)
+            
     @property      
     def get_better_parameters_name(self):
         lisa_target_modules = [

@@ -16,9 +16,8 @@ def main():
     # "modelscopet2v-webvid", "modelscopet2v-laion", "modelscopet2v-anime",
     # "modelscopet2v-real", "modelscopet2v-3d-cartoon"]
     model_path = "modelscopet2v-laion"
-    prompts = ["Spiderman is surfing",
-               "Slow pan upward of blazing oak fire in an indoor fireplace"]
-    num_inference_steps = 4
+    prompts = ["In slow motion, a dessert fork gently presses into the center of the cake. As the fork goes deeper, the outer crust begins to crack."]
+    num_inference_steps = 50
 
     model_id = "yhzhai/mcm"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -30,19 +29,19 @@ def main():
         raise ValueError(f"Unknown pipeline {model_path}")
     import os
 
-    lora = UNet3DConditionModel.from_pretrained(
-    "./work_dirs/modelscopet2v_distillation_15/checkpoint-final",
-    torch_device="cpu")
-    unet = lora
-    pipeline.unet = unet
+    # lora = UNet3DConditionModel.from_pretrained(
+    # "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_2/checkpoint-final",
+    # torch_device="cpu")
+    # unet = lora
+    # pipeline.unet = unet
     
     pipeline = pipeline.to(device,dtype=torch.float16)
     output = pipeline(
         prompt=prompts,
         num_frames=16,
-        guidance_scale=1.0,
+        guidance_scale=10.0,
         num_inference_steps=num_inference_steps,
-        generator=torch.Generator("cpu").manual_seed(50),
+        generator=torch.Generator("cpu").manual_seed(42),
     ).frames
     
     if not isinstance(output, list):
@@ -51,7 +50,7 @@ def main():
     for j in range(len(prompts)):
         export_to_video(
             output[j],
-            f"{j}-14.mp4",
+            f"{j}-00.mp4",
             fps=7,
         )
 

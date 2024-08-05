@@ -36,7 +36,7 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --disc_start_step 0 \
     --disc_gt_data webvid \
     --disc_tsn_num_frames 2 \
-    --cd_target learn \
+    --cd_target hlearn \
     --timestep_scaling_factor 4 \
     --cd_pred_x0_portion 0.5 \
     --num_ddim_timesteps 50 \

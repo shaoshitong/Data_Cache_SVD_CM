@@ -280,11 +280,11 @@ def main(args):
     )
 
     discriminator = Discriminator()
-    if args.dis_output_dir is not None and os.path.exists(args.dis_output_dir):
-        discriminator.from_pretrained(args.dis_output_dir)
-        logger.info(
-            f"\n Loaded pretrained discriminator from {args.dis_output_dir}\n"
-        )
+    if args.dis_output_dir is not None:
+        discriminator.load_state_dict(torch.load(args.dis_output_dir, map_location="cpu"))
+    logger.info(
+        f"\nhLoaded pretrained discriminator from {args.dis_output_dir}\n"
+    )
 
     # 7. Create online student U-Net. TAG-Pretrain
     # For whole model fine-tuning, this will be updated by the optimizer (e.g.,
@@ -337,12 +337,6 @@ def main(args):
         args.prev_train_unet,
         torch_device="cpu")
         unet = lora
-        if args.cd_target in ["learn", "hlearn"]:
-            spatial_head.from_pretrained(os.path.join(args.prev_train_unet.split("checkpoint-final")[0], "spatial_head"))
-            target_spatial_head.load_state_dict(spatial_head.state_dict())
-            target_spatial_head.train()
-            spatial_head.train()
-            target_spatial_head.requires_grad_(False)   
         print(f"Successfully load unet from {args.prev_train_unet}")
 
     unet.train()
@@ -916,7 +910,7 @@ def main(args):
         if args.use_lora:
             unet.save_pretrained(os.path.join(args.output_dir, "checkpoint-final"))
             if args.cd_target in ["learn", "hlearn"]:
-                spatial_head_ = accelerator.unwrap_model(target_spatial_head)
+                spatial_head_ = accelerator.unwrap_model(spatial_head)
                 spatial_head_.save_pretrained(
                     os.path.join(args.output_dir, "spatial_head")
                 )

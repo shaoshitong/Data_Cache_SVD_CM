@@ -11,7 +11,7 @@
 #     print(np.sum(ema,axis=0))
 #     return ema
 
-# beta = 0.999
+# beta = 0.9999
 # data = 16000
 # snapshot = 15
 # ema = calculate_ema(data, beta)
@@ -33,18 +33,15 @@
 # plt.ylabel('Weight')
 # plt.legend()
 # plt.savefig("./test_ema.png")
-# [3.24340489e-07 6.18906071e-07 1.79990178e-06 5.22649423e-06
-#  1.52076609e-05 4.42268983e-05 1.28424579e-04 3.73680208e-04
-#  1.08673626e-03 3.15562820e-03 9.18201025e-03 2.67031095e-02
-#  7.75395909e-02 2.25618886e-01 6.56144530e-01]
-
+# [0.22459092 0.02529037 0.02813822 0.03127583 0.03482862 0.03875055
+#  0.04307151 0.04796423 0.05336531 0.05931592 0.06605393 0.07349202
+#  0.0816869  0.09096616 0.10120952]
 import torch
 import numpy as np
 
-weights = [3.24340489e-07,6.18906071e-07, 1.79990178e-06, 5.22649423e-06,
-        1.52076609e-05, 4.42268983e-05, 1.28424579e-04, 3.73680208e-04,
-        1.08673626e-03, 3.15562820e-03, 9.18201025e-03, 2.67031095e-02,
-        7.75395909e-02, 2.25618886e-01, 6.56144530e-01]
+weights = [0.22459092, 0.02529037, 0.02813822, 0.03127583, 0.03482862, 0.03875055,
+ 0.04307151, 0.04796423, 0.05336531, 0.05931592, 0.06605393, 0.07349202,
+ 0.0816869, 0.09096616, 0.10120952]
 
 
 from typing import Optional
@@ -77,41 +74,24 @@ def get_modelscope_pipeline():
 
     return pipe
 
-def load_lcm_unet(snapshot_index=1, root_path="/home/shaoshitong/project/mcm/work_dirs"):
+def load_lcm_unet(snapshot_index=1, root_path="/data/shaoshitong/mcm_work_dirs_with_dis/"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     filename = f"modelscopet2v_distillation_{snapshot_index}" + "/checkpoint-final"
-    base_filename = f"modelscopet2v_distillation_1_lisa3" + "/checkpoint-1000"
     local_snapshot_path = os.path.join(root_path, filename)
-    if snapshot_index>=2 and snapshot_index<=6:
-            unet = UNet3DConditionModel.from_pretrained(
-            os.path.join(root_path,base_filename),
-            torch_device="cpu")
-            for jj in range(2, snapshot_index+1):
-                lora_filename = f"modelscopet2v_distillation_{jj}" + "/checkpoint-final"
-                unet = PeftModel.from_pretrained(
-                    unet,
-                    os.path.join(root_path,lora_filename),
-                    torch_device="cpu",
-                )
-                unet.merge_and_unload()
-                unet = unet.base_model.model
-    elif snapshot_index == 1:
-            unet = UNet3DConditionModel.from_pretrained(
-            local_snapshot_path.replace("n_1","n_1_lisa3").replace("checkpoint-final","checkpoint-1000"),
-            torch_device="cpu")       
-    else:
-            unet = UNet3DConditionModel.from_pretrained(
-            local_snapshot_path,
-            torch_device="cpu")
+    unet = UNet3DConditionModel.from_pretrained(
+    local_snapshot_path,
+    torch_device="cpu")
     return unet
 
-def merge_unet_for_ema(emas, weights):
+def merge_unet_for_ema(emas, weights, device="cuda"):
     emas = emas[1:]
+    emas[0] = emas[0].to(device)
     state_dict = emas[0].state_dict()
     for key in state_dict.keys():
         state_dict[key] = state_dict[key] * weights[0]
         for ema, weight in zip(emas[1:], weights[1:]):
-            state_dict[key] += (ema.state_dict()[key] * weight)
+            state_dict[key] += (ema.state_dict()[key].to(device) * weight)
+            del ema.state_dict()[key]
     final_ema = emas[0]
     final_ema.load_state_dict(state_dict)
     del emas[1:]
@@ -125,10 +105,10 @@ if __name__ == "__main__":
     unets = []
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     for i in range(1, 17):
-        unet = load_lcm_unet(i).to(device)
+        unet = load_lcm_unet(i)
         print(f"Successfully Load UNet-{i}")
         unets.append(unet)
-    unet = merge_unet_for_ema(unets, weights)
+    unet = merge_unet_for_ema(unets, weights, device).to(device)
     if not os.path.exists("./work_dirs/ema/"):
         os.makedirs("./work_dirs/ema/",exist_ok=True)
     unet.save_pretrained("./work_dirs/ema/")

@@ -410,7 +410,6 @@ def main(args):
             f"trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param}"
         )
     
-
     if args.prev_train_unet is not None and args.prev_train_unet != "None" and os.path.exists(args.prev_train_unet):
         lora = UNet3DConditionModel.from_pretrained(
         args.prev_train_unet,
@@ -452,12 +451,9 @@ def main(args):
     # Move teacher_unet to device, optionally cast to weight_dtype
     if not args.use_lora:
         target_unet.to(accelerator.device)
-    teacher_unet.to(accelerator.device)
-    if args.cast_teacher_unet:
-        teacher_unet.to(dtype=weight_dtype)
     unet.to(device=accelerator.device,dtype=weight_dtype)
     unet.requires_grad_(False)
-    
+    teacher_unet = unet
     # Also move the alpha and sigma noise schedules to accelerator.device.
     alpha_schedule = alpha_schedule.to(accelerator.device)
     sigma_schedule = sigma_schedule.to(accelerator.device)
@@ -892,7 +888,7 @@ def main(args):
                 text_probs = (100.0 * image_features @ text_features.T)
                 score = text_probs * max(start_timesteps.item() / solver.ddim_timesteps[-1], 0.5)
                 
-                if score < 7.5:
+                if score < 5:
                     progress_bar.update(1)
                     global_step += 1
                     right_global_step += 1
