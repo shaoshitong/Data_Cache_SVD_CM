@@ -6,7 +6,7 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --mixed_precision=fp16 \
     --resolution=256 \
     --num_frames=16 \
-    --learning_rate=5e-6 \
+    --learning_rate=2e-6 \
     --loss_type="huber" \
     --adam_weight_decay=0.0 \
     --dataloader_num_workers=4 \
@@ -45,3 +45,5 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --lr_warmup_steps 100 --scheduler_last_step 2000 \
     --dis_output_dir $DIS_OUTPUT_DIR \
     --prev_train_unet $PREV_TRAIN_UNET
+
+# 5e-6

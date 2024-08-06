@@ -1,11 +1,11 @@
-COUNT=2 # 1-5, 2-10, 3-15, 4-20, 5-25, 6-30
+COUNT=0 # 1-5, 2-10, 3-15, 4-20, 5-25, 6-30
 DIFFERENCE=1
 END_DIFFERENCE=5
 
-for variable  in {10..75..5}
+for variable  in {0..75..5}
     do
         NEW_COUNT=$[$COUNT+$DIFFERENCE]
-        # cp -r /home/shaoshitong/extract_code_dir_scope_${COUNT}/  /data/shaoshitong/extract_code_dir_scope_${COUNT}/
+        cp -r /home/shaoshitong/extract_code_dir_scope_${COUNT}/  /data/shaoshitong/extract_code_dir_scope_${COUNT}/
         rm -rf /home/shaoshitong/extract_code_dir_scope_${COUNT}/
         pkill python
         pkill wandb

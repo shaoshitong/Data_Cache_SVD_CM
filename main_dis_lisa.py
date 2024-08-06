@@ -337,7 +337,7 @@ def main(args):
         args.prev_train_unet,
         torch_device="cpu")
         unet = lora
-        if args.cd_target in ["learn", "hlearn"]:
+        if args.cd_target in ["hlearn"]:
             spatial_head.from_pretrained(os.path.join(args.prev_train_unet.split("checkpoint-final")[0], "spatial_head"))
             target_spatial_head.load_state_dict(spatial_head.state_dict())
             target_spatial_head.train()
@@ -566,7 +566,7 @@ def main(args):
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
-    lisa_trainer = LISADiffusion(unet, spatial_head, rate=0.2)
+    lisa_trainer = LISADiffusion(unet, spatial_head, rate=0.225)
     lisa_trainer.insert_hook(optimizer_class=optimizer_class,
                         get_scheduler=get_scheduler,
                         accelerator=accelerator,

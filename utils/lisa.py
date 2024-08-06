@@ -74,7 +74,7 @@ class LISADiffusion:
         param_number = len(list(self.model.parameters()))
         lisa_p = 8 / param_number if self.rate is None else self.rate
         self.lisa(model=self.model,p=lisa_p)
-        self.last_epoch += 10
+        self.last_epoch += 5
         # count = 0
         # for p in self.model.parameters():
         #     if (id(p) in self.optimizer_dict) and (count != 0 or count!=len(list(self.model.parameters()))-1):
