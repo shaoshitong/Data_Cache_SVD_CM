@@ -9,11 +9,11 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --learning_rate=5e-6 \
     --loss_type="huber" \
     --adam_weight_decay=0.0 \
-    --dataloader_num_workers=2 \
+    --dataloader_num_workers=4 \
     --validation_steps=5000 \
     --checkpointing_steps=500 \
-    --train_batch_size=1 \
-    --gradient_accumulation_steps=16 \
+    --train_batch_size=4 \
+    --gradient_accumulation_steps=8 \
     --seed=453645634 \
     --enable_xformers_memory_efficient_attention \
     --report_to tensorboard wandb \

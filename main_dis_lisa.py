@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import List, Optional, Union
 import time
 
-from pytorch_memlab import MemReporter
 from contextlib import redirect_stdout
 import accelerate
 import diffusers
@@ -542,7 +541,7 @@ def main(args):
 
     WEBVID_DATA_SIZE = 2467378
     local_rank = torch.distributed.get_rank()
-    dataset = CustomDataset(args.extract_code_dir,rank=[0,1,2,3,4,5,6,7])    
+    dataset = CustomDataset(args.extract_code_dir,rank=[i for i in range(torch.cuda.device_count())])
     sampler = DistributedSampler(
         dataset,
         num_replicas=torch_dist.get_world_size(),

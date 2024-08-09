@@ -13,7 +13,7 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --validation_steps=5000 \
     --checkpointing_steps=500 \
     --train_batch_size=1 \
-    --gradient_accumulation_steps=1 \
+    --gradient_accumulation_steps=2 \
     --seed=453645634 \
     --enable_xformers_memory_efficient_attention \
     --report_to tensorboard wandb \

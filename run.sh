@@ -5,16 +5,16 @@ END_DIFFERENCE=5
 for variable  in {0..75..5}
     do
         NEW_COUNT=$[$COUNT+$DIFFERENCE]
-        cp -r /home/shaoshitong/extract_code_dir_scope_${COUNT}/  /data/shaoshitong/extract_code_dir_scope_${COUNT}/
-        rm -rf /home/shaoshitong/extract_code_dir_scope_${COUNT}/
+        # cp -r /home/shaoshitong/extract_code_dir_scope_${COUNT}/  /data/shaoshitong/extract_code_dir_scope_${COUNT}/
+        # rm -rf /home/shaoshitong/extract_code_dir_scope_${COUNT}/
         pkill python
         pkill wandb
-        export VIDEO_DATA_PATH=/data/shared_data/Webvid-2M/
-        export GPUS=8  # number of GPUs
+        export VIDEO_DATA_PATH=/data/civy/Data_Cache_SVD_CM/webvid/Webvid-2M
+        export GPUS=4  # number of GPUs
         export MASTER_PORT=29501  # port for distributed training
         export RUN_NAME=modelscopet2v_extract_code_${NEW_COUNT}/  # name of the run
         export OUTPUT_DIR=work_dirs/$RUN_NAME  # directory to save the model checkpoints
-        export EXPORT_DIR=/home/shaoshitong/extract_code_dir_scope_${NEW_COUNT}/
+        export EXPORT_DIR=./data_cache/extract_code_dir_scope_${NEW_COUNT}/
         export PREV_TRAIN_UNET=./work_dirs/modelscopet2v_distillation_${COUNT}/checkpoint-final
         export BEGIN=$variable
         export END=$[$variable+$END_DIFFERENCE]

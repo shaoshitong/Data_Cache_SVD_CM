@@ -569,6 +569,7 @@ def main(args):
             if not args.use_lora:
                 target_unet.enable_xformers_memory_efficient_attention()
         else:
+            exit(-1)
             logger.warning(
                 "xformers is not available. Make sure it is installed correctly"
             )
@@ -607,7 +608,7 @@ def main(args):
         resolution=args.resolution,
         shuffle_buffer_size=1000,
         pin_memory=True,
-        persistent_workers=True,
+        persistent_workers=False,
         pixel_mean=[0.5, 0.5, 0.5],
         pixel_std=[0.5, 0.5, 0.5],
         begin = args.web_dataset_begin,
@@ -765,6 +766,7 @@ def main(args):
                 video = video.to(accelerator.device, non_blocking=True)
                 encoded_text = compute_embeddings_fn(text)
                 store_dict["text"] = text
+                print(text)
                 
                 pixel_values = video.to(dtype=weight_dtype)
                 if vae.dtype != weight_dtype:
@@ -882,16 +884,30 @@ def main(args):
                             )
                 
                 ################### Data-Centric #####################
-                pre_image = \
-                vae.decode(einops.rearrange(latents.half().cuda(),"b c t h w -> (b t) c h w")[5].unsqueeze(0) / vae.config.scaling_factor).sample
-                pre_image = pre_image[0].mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
-                pre_image = Image.fromarray(pre_image)
-                image_emb = open_clip_model.encode_image(preprocesses(pre_image).unsqueeze(0).to(accelerator.device))
-                image_features = image_emb / image_emb.norm(dim=-1, keepdim=True) 
-                text_features = clip_emb / clip_emb.norm(dim=-1, keepdim=True) 
-                text_probs = (100.0 * image_features @ text_features.T)
-                score = text_probs * max(start_timesteps.item() / solver.ddim_timesteps[-1], 0.5)
-                
+                if latents.shape[0] == 1:
+                    pre_image = \
+                    vae.decode(einops.rearrange(latents.half().cuda(),"b c t h w -> (b t) c h w")[5].unsqueeze(0) / vae.config.scaling_factor).sample
+                    pre_image = pre_image[0].mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
+                    pre_image = Image.fromarray(pre_image)
+                    image_emb = open_clip_model.encode_image(preprocesses(pre_image).unsqueeze(0).to(accelerator.device))
+                    image_features = image_emb / image_emb.norm(dim=-1, keepdim=True) 
+                    text_features = clip_emb / clip_emb.norm(dim=-1, keepdim=True) 
+                    text_probs = (100.0 * image_features @ text_features.T)
+                    score = text_probs * max(start_timesteps.item() / solver.ddim_timesteps[-1], 0.5)
+                else:
+                    scores = []
+                    for j in range(min(8,latents.shape[0])):
+                        pre_image = \
+                        vae.decode(einops.rearrange(latents.half().cuda(),"b c t h w -> (b t) c h w")[5+16*j].unsqueeze(0) / vae.config.scaling_factor).sample
+                        pre_image = pre_image[0].mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
+                        pre_image = Image.fromarray(pre_image)
+                        image_emb = open_clip_model.encode_image(preprocesses(pre_image).unsqueeze(0).to(accelerator.device))
+                        image_features = image_emb / image_emb.norm(dim=-1, keepdim=True) 
+                        text_features = clip_emb[j].unsqueeze(0) / clip_emb[j].unsqueeze(0).norm(dim=-1, keepdim=True)
+                        text_probs = (100.0 * image_features @ text_features.T)
+                        score = text_probs * max(start_timesteps[j].item() / solver.ddim_timesteps[-1], 0.5)                        
+                        scores.append(score)
+                    score = sum(scores)/len(scores)
                 if score < 7.5:
                     progress_bar.update(1)
                     global_step += 1

@@ -369,7 +369,7 @@ def main(args):
     # needed for the SD XL UNet to operate.
 
     local_rank = torch.distributed.get_rank()
-    dataset = CustomDataset(args.extract_code_dir,rank=[0,1,2,3,4,5,6,7])
+    dataset = CustomDataset(args.extract_code_dir,rank=[i for i in range(torch.cuda.device_count())])
     train_dataloader = DataLoaderX(dataset,
                             batch_size=1,
                             shuffle=False,
@@ -458,7 +458,7 @@ def main(args):
                 target = target.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
                 sd_prompt_embeds = sd_prompt_embeds.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
                 start_timesteps, timesteps = start_timesteps.squeeze(0), timesteps.squeeze(0)
-                   
+                # print(noisy_model_input.shape, target.shape, sd_prompt_embeds.shape, text)
                 # 3. Get boundary scalings for start_timesteps and (end) timesteps.
                 c_skip_start, c_out_start = scalings_for_boundary_conditions(
                     start_timesteps, timestep_scaling=args.timestep_scaling_factor
@@ -470,42 +470,29 @@ def main(args):
                     timesteps, timestep_scaling=args.timestep_scaling_factor
                 )
                 c_skip, c_out = [append_dims(x, noisy_model_input.ndim) for x in [c_skip, c_out]]
-
                 loss_dict = {}
                 gt_latents = []
                 ori_gt_latents = []
 
                 with torch.no_grad():
                     gen_latents = target
-                    gen_latents = rearrange(gen_latents, "b c t h w -> (b t) c h w")[:8]
-                    gt_latent = inference_sd_model(prompt=text, 
-                                                    height=1024, 
-                                                    width=1024, 
-                                                    num_inference_steps=15, 
-                                                    guidance_scale=5).images[0] # latents=add_noise_model_input
-                    tmp = (trans(gt_latent).to(accelerator.device) * 2 - 1).unsqueeze(0)
-                    gt_latent = vae.config.scaling_factor * vae.encode(tmp).latent_dist.sample()
+                    gen_latents = gen_latents[:,:,torch.randint(
+                        0, gen_latents.shape[2], (1,), device=gen_latents.device
+                    ).long().item(),:,:].squeeze(2)
+                    for _text in text:
+                        gt_latent = inference_sd_model(prompt=_text[0], 
+                                                        height=1024, 
+                                                        width=1024, 
+                                                        num_inference_steps=15, 
+                                                        guidance_scale=5).images[0] # latents=add_noise_model_input
+                        tmp = (trans(gt_latent).to(accelerator.device) * 2 - 1).unsqueeze(0)
+                        gt_latent = vae.config.scaling_factor * vae.encode(tmp).latent_dist.sample()
+                        gt_latents.append(gt_latent)
                     # ori_gt_latent = video_vae.config.scaling_factor * video_vae.encode(tmp.float()).latent_dist.sample().half()
                     
                     # tmp = vae.decode(gen_latents.float() / vae.config.scaling_factor, return_dict=False)[0]
                     # ori_gen_latents = video_vae.config.scaling_factor * video_vae.encode(tmp).latent_dist.sample().half()
 
-                    for i in range(0, 4, 1):
-                        gt_latents.append(gt_latent)
-                        # ori_gt_latents.append(ori_gt_latent)
-
-                    gt_latent = inference_sd_model(prompt=text, 
-                                                    height=1024, 
-                                                    width=1024, 
-                                                    num_inference_steps=20, 
-                                                    guidance_scale=5).images[0] # latents=add_noise_model_input
-                    tmp = (trans(gt_latent).to(accelerator.device) * 2 - 1).unsqueeze(0)
-                    gt_latent = vae.config.scaling_factor * vae.encode(tmp).latent_dist.sample()
-                    # ori_gt_latent = video_vae.config.scaling_factor * video_vae.encode(tmp.float()).latent_dist.sample().half()
-
-                    for i in range(0, 4, 1):
-                        gt_latents.append(gt_latent)
-                        # ori_gt_latents.append(ori_gt_latent)
 
                     gt_latents = torch.cat(gt_latents, dim=0)
                     gt_latents = gt_latents.to(weight_dtype)
@@ -519,7 +506,6 @@ def main(args):
                     #     save_image(video_vae, gen_latents.float(), "gen_latents.png")
                     #     save_image(vae, ori_gt_latents.float(), "ori_gt_latents.png")
                     #     save_image(vae, ori_gen_latents.float(), "ori_gen_latents.png")
-
                     index = torch.randint(
                         0, args.num_ddim_timesteps, (gt_latents.shape[0],), device=gt_latents.device
                     ).long()
@@ -562,12 +548,12 @@ def main(args):
                         gen_noisy_model_input_list.append(gen_noisy_model_input)
                         # ori_gt_noisy_model_input_list.append(ori_gt_noisy_model_input)
                         # ori_gen_noisy_model_input_list.append(ori_gen_noisy_model_input)
-                                               
+                                        
                     gt_noisy = torch.cat(gt_noisy_model_input_list, dim=0).half()                       
                     gen_noisy = torch.cat(gen_noisy_model_input_list, dim=0).half()   
                     ori_gt_noisy = gt_noisy # torch.cat(ori_gt_noisy_model_input_list, dim=0).half()                       
                     ori_gen_noisy = gen_noisy # torch.cat(ori_gen_noisy_model_input_list, dim=0).half()   
-                                        
+                
                 sd_prompt_embeds = sd_prompt_embeds.expand(gt_noisy.shape[0],-1,-1)
                 b1, b2 = gt_noisy.shape[0], gen_noisy.shape[0]
                 disc_pred, align_loss = discriminator(torch.cat([gt_noisy, gen_noisy],0), 
@@ -575,7 +561,6 @@ def main(args):
                                           torch.cat([sd_prompt_embeds, sd_prompt_embeds],0),
                                           ori_sample=torch.cat([ori_gt_noisy, ori_gen_noisy],0))
                 disc_pred_gt, disc_pred_gen = torch.split(disc_pred,[b1, b2],dim=0)
-            
                 if args.disc_loss_type == "bce":
                     pos_label = torch.ones_like(disc_pred_gt)
                     neg_label = torch.zeros_like(disc_pred_gen)
@@ -669,7 +654,7 @@ def main(args):
                         logger.info(f"Saved state to {save_path}")
                     except Exception as e:
                         logger.info(f"Failed to save state: {e}")
-    
+
             logs = {
                 "unet_lr": lr_scheduler.get_last_lr()[0],
             }
