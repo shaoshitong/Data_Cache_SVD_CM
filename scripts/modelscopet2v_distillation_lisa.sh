@@ -17,7 +17,7 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --seed=453645634 \
     --enable_xformers_memory_efficient_attention \
     --report_to tensorboard wandb \
-    --tracker_project_name="motion-consistency-model" \
+    --tracker_project_name="motion-consistency-model-constant-wo-origin-cd" \
     --tracker_run_name=$RUN_NAME \
     --dataset_path $VIDEO_DATA_PATH \
     --num_train_epochs 2 \
@@ -25,7 +25,7 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --use_lora \
     --scale_lr \
     --max_grad_norm 10 \
-    --lr_scheduler cosine \
+    --lr_scheduler constant \
     --w_min 5 \
     --w_max 15 \
     --frame_interval 8 \

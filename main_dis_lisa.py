@@ -549,11 +549,11 @@ def main(args):
         shuffle=True,
     )
     train_dataloader = DataLoaderX(dataset,
-                            batch_size=1,
+                            batch_size=args.train_batch_size,
                             shuffle=False,
                             sampler=sampler,
                             num_workers=args.dataloader_num_workers,
-                            pin_memory=False,
+                            pin_memory=True,
                             drop_last=True)
     
     # 14. LR Scheduler creation
@@ -698,13 +698,19 @@ def main(args):
                     batch["sd_prompt_embeds"], batch["prompt_embeds"], batch["start_timesteps"], \
                     batch["timesteps"], batch["text"]
                 
-                noisy_model_input = noisy_model_input.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
-                target = target.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
-                prompt_embeds = prompt_embeds.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
-                sd_prompt_embeds = sd_prompt_embeds.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
-                start_timesteps, timesteps = start_timesteps.to(device=accelerator.device, dtype=torch.int64).squeeze(0), \
-                    timesteps.to(device=accelerator.device, dtype=torch.int64).squeeze(0)                
-                # torch.Size([1, 4, 16, 64, 64]) torch.Size([1, 4, 16, 64, 64]) torch.Size([1, 1024]) torch.Size([2, 3, 512, 512]) torch.Size([1, 1024]) torch.Size([1, 77, 768])
+                noisy_model_input = noisy_model_input.to(device=accelerator.device, dtype=weight_dtype)
+                target = target.to(device=accelerator.device, dtype=weight_dtype)
+                prompt_embeds = prompt_embeds.to(device=accelerator.device, dtype=weight_dtype)
+                sd_prompt_embeds = sd_prompt_embeds.to(device=accelerator.device, dtype=weight_dtype)
+                start_timesteps, timesteps = start_timesteps.to(device=accelerator.device, dtype=torch.int64), \
+                    timesteps.to(device=accelerator.device, dtype=torch.int64)                
+                
+                noisy_model_input = rearrange(noisy_model_input, "b1 b2 c t h w -> (b1 b2) c t h w")
+                target = rearrange(target, "b1 b2 c t h w -> (b1 b2) c t h w")
+                prompt_embeds = rearrange(prompt_embeds, "b1 b2 c w-> (b1 b2) c w")
+                sd_prompt_embeds = rearrange(sd_prompt_embeds, "b1 b2 c w -> (b1 b2) c w")
+                start_timesteps = rearrange(start_timesteps, "b1 b2 -> (b1 b2)")
+                timesteps = rearrange(timesteps, "b1 b2 -> (b1 b2)")
 
                 # 3. Get boundary scalings for start_timesteps and (end) timesteps.
             
@@ -720,13 +726,17 @@ def main(args):
                 c_skip, c_out = [append_dims(x, noisy_model_input.ndim) for x in [c_skip, c_out]]
                 
                 # 7. Get online LCM prediction on z_{t_{n + k}} (noisy_model_input), w, c, t_{n + k} (start_timesteps)
-                noise_pred = unet(
-                    noisy_model_input,
-                    start_timesteps,
-                    timestep_cond=None,
-                    encoder_hidden_states=prompt_embeds,
-                    # added_cond_kwargs=encoded_text,
-                ).sample 
+                total_noise_pred = []
+                for ii in range(0,noisy_model_input.shape[0],4):
+                    noise_pred = unet(
+                        noisy_model_input[ii:ii+4],
+                        start_timesteps[ii:ii+4],
+                        timestep_cond=None,
+                        encoder_hidden_states=prompt_embeds[ii:ii+4],
+                        # added_cond_kwargs=encoded_text,
+                    ).sample
+                    total_noise_pred.append(noise_pred)
+                total_noise_pred = torch.cat(total_noise_pred,0)
                 pred_x_0_stu = get_predicted_original_sample(
                     noise_pred,
                     start_timesteps,
@@ -766,19 +776,20 @@ def main(args):
                 loss_dict["loss_unet_cd"] = loss_unet_cd
                 loss_unet_total = loss_unet_cd
 
-                loss_unet_pred_x0 = torch.mean(
-                        torch.sqrt(
-                            (model_pred.float() - target.float()) ** 2
-                            + args.huber_c**2
-                        )
-                        - args.huber_c
-                    )
-                loss_dict["loss_unet_pred_x0"] = loss_unet_pred_x0
-                loss_unet_total = loss_unet_total + (loss_unet_pred_x0 * 0.1)
+                # loss_unet_pred_x0 = torch.mean(
+                #         torch.sqrt(
+                #             (model_pred.float() - target.float()) ** 2
+                #             + args.huber_c**2
+                #         )
+                #         - args.huber_c
+                #     )
+                # loss_dict["loss_unet_pred_x0"] = loss_unet_pred_x0
+                # loss_unet_total = loss_unet_total + (loss_unet_pred_x0 * 0.1)
                 
                 if not args.no_disc:
                     gen_latents = rearrange(model_pred, "b c t n m -> (b t) c n m")
-                    sd_prompt_embeds = sd_prompt_embeds.expand(gen_latents.shape[0],-1,-1)                 
+                    sd_prompt_embeds = sd_prompt_embeds.unsqueeze(1).expand(-1, model_pred.shape[2],-1,-1)
+                    sd_prompt_embeds =  rearrange(sd_prompt_embeds, "b t n m -> (b t) n m")  
                     index = torch.randint(
                         0, args.num_ddim_timesteps, (gen_latents.shape[0],), device=gen_latents.device
                     ).long()
