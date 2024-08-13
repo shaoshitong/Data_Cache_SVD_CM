@@ -655,7 +655,16 @@ def parse_args():
         "--prev_train_unet", default=None, type=str, help="the checkpoint path of unet trained in previous step"
     )
     parser.add_argument(
+        "--prev_teacher_unet", default=None, type=str, help="the checkpoint path of unet trained in previous step"
+    )
+    parser.add_argument(
         "--scheduler_last_step", default=0, type=int, help="the end schedule index of the previous stage"
+    )
+    parser.add_argument(
+        "--final_improved",
+        action="store_true",
+        default=False,
+        help="If use final image quality improvement",
     )
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))

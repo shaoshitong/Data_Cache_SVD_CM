@@ -51,6 +51,7 @@ class CustomDataset(Dataset):
             prompt_embeds = file["prompt_embeds"]
             start_timesteps = file["start_timesteps"]
             timesteps = file["timesteps"]
+            latents = file["latents"]
             text = str(file["text"][0])
         except:
             file = self.cache if self.cache is not None else np.load(self.files[0])
@@ -60,10 +61,12 @@ class CustomDataset(Dataset):
             prompt_embeds = file["prompt_embeds"]
             start_timesteps = file["start_timesteps"]
             timesteps = file["timesteps"]
+            latents = file["latents"]
             text = str(file["text"][0])
             
         return dict(noisy_model_input=torch.from_numpy(noisy_model_input), 
                     target=torch.from_numpy(target),
+                    latents=torch.from_numpy(latents),
                     sd_prompt_embeds=torch.from_numpy(sd_prompt_embeds),
                     prompt_embeds=torch.from_numpy(prompt_embeds),
                     start_timesteps=start_timesteps, 

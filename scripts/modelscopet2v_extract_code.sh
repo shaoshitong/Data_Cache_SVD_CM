@@ -14,7 +14,7 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --checkpointing_steps=500 \
     --train_batch_size=1 \
     --gradient_accumulation_steps=16 \
-    --seed=453645634 \
+    --seed=$SEED \
     --enable_xformers_memory_efficient_attention \
     --report_to tensorboard wandb \
     --tracker_project_name="motion-consistency-model" \
@@ -26,8 +26,8 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --scale_lr \
     --max_grad_norm 10 \
     --lr_scheduler cosine \
-    --w_min 5 \
-    --w_max 15 \
+    --w_min 0 \
+    --w_max 5 \
     --frame_interval 8 \
     --disc_loss_type wgan \
     --disc_loss_weight 1 \
@@ -44,4 +44,5 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --extract-code-dir $EXPORT_DIR \
     --web-dataset-end $END \
     --web-dataset-begin $BEGIN \
-    --prev_train_unet $PREV_TRAIN_UNET
+    --prev_train_unet $PREV_TRAIN_UNET \
+    --prev_teacher_unet $PREV_TEACHER_UNET

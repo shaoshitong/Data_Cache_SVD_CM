@@ -410,21 +410,18 @@ def main(args):
         print(
             f"trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param}"
         )
+    
 
     if args.prev_train_unet is not None and args.prev_train_unet != "None" and os.path.exists(args.prev_train_unet):
         lora = UNet3DConditionModel.from_pretrained(
         args.prev_train_unet,
         torch_device="cpu")
         unet = lora
-        print(f"Successfully load unet from {args.prev_train_unet}")
-    
-    if args.prev_teacher_unet is not None and args.prev_train_unet != "None" and os.path.exists(args.prev_train_unet):
         teacher_unet = UNet3DConditionModel.from_pretrained(
-        args.prev_teacher_unet,
+        "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_26/checkpoint-final",
         torch_device="cpu")
-        print(f"Successfully load teacher unet from {args.prev_teacher_unet}")
-    
-    
+        print(f"Successfully load unet from {args.prev_train_unet}")
+        
     # Check that all trainable models are in full precision
     low_precision_error_string = (
         " Please make sure to always have all model weights in full float32 precision when starting training - even if"
@@ -787,7 +784,6 @@ def main(args):
                         ).latent_dist.sample()
                     )
                 latents = torch.cat(latents, dim=0)
-                
                 latents = rearrange(
                     latents,
                     "(b t) c h w -> b c t h w",
@@ -796,7 +792,7 @@ def main(args):
                 )
 
                 latents = latents * vae.config.scaling_factor
-                latents = latents.to(weight_dtype)
+                save_latents = latents = latents.to(weight_dtype)
                 bsz = latents.shape[0]
 
                 # 2. Sample a random timestep for each image t_n from the ODE solver timesteps without bias.
@@ -808,13 +804,16 @@ def main(args):
                 index = torch.randint(
                     0, args.num_ddim_timesteps, (bsz,), device=latents.device
                 ).long() ## NEED ##
-                
                 start_timesteps = solver.ddim_timesteps[index]
-                timesteps = start_timesteps - topk
+                values = torch.tensor([999, 759, 499, 259]).to(device=latents.device,dtype=solver.ddim_timesteps.dtype)
+                if args.final_improved:
+                    timesteps = torch.where(torch.isin(start_timesteps,values),start_timesteps - topk, start_timesteps)
+                else:
+                    timesteps = start_timesteps - topk
                 timesteps = torch.where(
                     timesteps < 0, torch.zeros_like(timesteps), timesteps
                 )
-
+                # print(start_timesteps, timesteps)
                 # 3. Get boundary scalings for start_timesteps and (end) timesteps.
                 c_skip_start, c_out_start = scalings_for_boundary_conditions(
                     start_timesteps, timestep_scaling=args.timestep_scaling_factor
@@ -927,9 +926,9 @@ def main(args):
                 store_dict["start_timesteps"] = start_timesteps
                 store_dict["timesteps"] = timesteps
                 store_dict["latents"] = rearrange(
-                    latents,
+                    save_latents,
                     "b c t h w -> (b t) c h w",
-                )[:4].to(weight_dtype) * vae.config.scaling_factor
+                )[:4]
                 
                 #######################################################################
                 ### NEED noisy_model_input, use_pred_x0, start_timesteps, timesteps ###
@@ -1006,7 +1005,12 @@ def main(args):
                         # augmented PF-ODE trajectory (solving backward in time)
                         # Note that the DDIM step depends on both the predicted x_0 and source noise eps_0.
                         x_prev = solver.ddim_step(pred_x0, pred_noise, index)
-
+                if args.final_improved:
+                    x_prev = torch.where(torch.isin(start_timesteps,values), x_prev, noisy_model_input)
+                    for b_idx in range(bsz): # Add noise
+                        if not torch.isin(start_timesteps,values)[b_idx].item():
+                            x_prev[b_idx,None] = noisy_model_input[b_idx,None]
+                        
                 # 9. Get target LCM prediction on x_prev, w, c, t_n (timesteps)
                 # Note that we do not use a separate target network for LCM-LoRA distillation.
                 with torch.no_grad():

@@ -450,9 +450,9 @@ def main(args):
                 # 1. Load and process the image and text conditioning
                 noisy_model_input, target, sd_prompt_embeds, \
                 prompt_embeds, start_timesteps, \
-                timesteps, text = batch["noisy_model_input"], batch["target"], \
+                timesteps, text, real_data = batch["noisy_model_input"], batch["target"], \
                     batch["sd_prompt_embeds"], batch["prompt_embeds"], batch["start_timesteps"], \
-                    batch["timesteps"], batch["text"]
+                    batch["timesteps"], batch["text"], batch["latents"]
                 
                 noisy_model_input = noisy_model_input.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
                 target = target.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
@@ -490,23 +490,22 @@ def main(args):
                     # tmp = vae.decode(gen_latents.float() / vae.config.scaling_factor, return_dict=False)[0]
                     # ori_gen_latents = video_vae.config.scaling_factor * video_vae.encode(tmp).latent_dist.sample().half()
 
-                    for i in range(0, 4, 1):
+                    for i in range(0, 2, 1):
                         gt_latents.append(gt_latent)
-                        # ori_gt_latents.append(ori_gt_latent)
 
                     gt_latent = inference_sd_model(prompt=text, 
                                                     height=1024, 
                                                     width=1024, 
-                                                    num_inference_steps=20, 
+                                                    num_inference_steps=15, 
                                                     guidance_scale=5).images[0] # latents=add_noise_model_input
                     tmp = (trans(gt_latent).to(accelerator.device) * 2 - 1).unsqueeze(0)
                     gt_latent = vae.config.scaling_factor * vae.encode(tmp).latent_dist.sample()
                     # ori_gt_latent = video_vae.config.scaling_factor * video_vae.encode(tmp.float()).latent_dist.sample().half()
 
-                    for i in range(0, 4, 1):
+                    for i in range(0, 2, 1):
                         gt_latents.append(gt_latent)
-                        # ori_gt_latents.append(ori_gt_latent)
 
+                    gt_latents.append(real_data)
                     gt_latents = torch.cat(gt_latents, dim=0)
                     gt_latents = gt_latents.to(weight_dtype)
                     # ori_gt_latents = torch.cat(ori_gt_latents, dim=0)

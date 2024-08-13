@@ -6,7 +6,7 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --mixed_precision=fp16 \
     --resolution=256 \
     --num_frames=16 \
-    --learning_rate=2e-6 \
+    --learning_rate=5e-6 \
     --loss_type="huber" \
     --adam_weight_decay=0.0 \
     --dataloader_num_workers=4 \
@@ -14,7 +14,7 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --checkpointing_steps=500 \
     --train_batch_size=1 \
     --gradient_accumulation_steps=16 \
-    --seed=453645634 \
+    --seed=$SEED \
     --enable_xformers_memory_efficient_attention \
     --report_to tensorboard wandb \
     --tracker_project_name="motion-consistency-model" \
@@ -46,4 +46,4 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --dis_output_dir $DIS_OUTPUT_DIR \
     --prev_train_unet $PREV_TRAIN_UNET
 
-# 5e-6
+# 5e-6 constant

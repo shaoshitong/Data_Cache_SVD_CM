@@ -566,7 +566,7 @@ def main(args):
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
-    lisa_trainer = LISADiffusion(unet, spatial_head, rate=0.225)
+    lisa_trainer = LISADiffusion(unet, spatial_head, rate=0.3)
     lisa_trainer.insert_hook(optimizer_class=optimizer_class,
                         get_scheduler=get_scheduler,
                         accelerator=accelerator,
@@ -833,7 +833,7 @@ def main(args):
                         args.ema_decay,
                     )
                 progress_bar.update(1)
-                if global_step % 10 == 0 and global_step != 0: # you can use other number to replace 6
+                if global_step % 20 == 0 and global_step != 0: # you can use other number to replace 6
                     lisa_trainer.lisa_recall()
                     accelerator.clear()
                 global_step += 1
