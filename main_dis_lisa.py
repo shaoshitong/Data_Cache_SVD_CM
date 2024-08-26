@@ -695,16 +695,17 @@ def main(args):
                 # 1. Load and process the image and text conditioning
                 noisy_model_input, target, sd_prompt_embeds, \
                 prompt_embeds, start_timesteps, \
-                timesteps, text = batch["noisy_model_input"], batch["target"], \
+                timesteps, text, real_data = batch["noisy_model_input"], batch["target"], \
                     batch["sd_prompt_embeds"], batch["prompt_embeds"], batch["start_timesteps"], \
-                    batch["timesteps"], batch["text"]
+                    batch["timesteps"], batch["text"], batch["latents"]
                 
                 noisy_model_input = noisy_model_input.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
                 target = target.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
                 prompt_embeds = prompt_embeds.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
                 sd_prompt_embeds = sd_prompt_embeds.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)
                 start_timesteps, timesteps = start_timesteps.to(device=accelerator.device, dtype=torch.int64).squeeze(0), \
-                    timesteps.to(device=accelerator.device, dtype=torch.int64).squeeze(0)                
+                    timesteps.to(device=accelerator.device, dtype=torch.int64).squeeze(0)     
+                real_data =  real_data.to(device=accelerator.device, dtype=weight_dtype).squeeze(0)       
                 # torch.Size([1, 4, 16, 64, 64]) torch.Size([1, 4, 16, 64, 64]) torch.Size([1, 1024]) torch.Size([2, 3, 512, 512]) torch.Size([1, 1024]) torch.Size([1, 77, 768])
 
                 # 3. Get boundary scalings for start_timesteps and (end) timesteps.
@@ -766,16 +767,26 @@ def main(args):
                     )
                 loss_dict["loss_unet_cd"] = loss_unet_cd
                 loss_unet_total = loss_unet_cd
-
-                loss_unet_pred_x0 = torch.mean(
+                real_data = rearrange(real_data.float(), "(b t) c h w -> b c t h w", t=16)
+                loss_unet_reg = torch.mean(
                         torch.sqrt(
-                            (model_pred.float() - target.float()) ** 2
+                            (model_pred.float() - real_data.float()) ** 2
                             + args.huber_c**2
                         )
                         - args.huber_c
                     )
-                loss_dict["loss_unet_pred_x0"] = loss_unet_pred_x0
-                loss_unet_total = loss_unet_total + (loss_unet_pred_x0 * 0.1)
+                # print(model_pred.shape, model_pred.mean(), real_data.shape, real_data.mean())
+                loss_dict["loss_unet_reg"] = loss_unet_reg
+                loss_unet_total = loss_unet_total + 1e-2 * loss_unet_reg
+                # loss_unet_pred_x0 = torch.mean(
+                #         torch.sqrt(
+                #             (model_pred.float() - target.float()) ** 2
+                #             + args.huber_c**2
+                #         )
+                #         - args.huber_c
+                #     )
+                # loss_dict["loss_unet_pred_x0"] = loss_unet_pred_x0
+                # loss_unet_total = loss_unet_total + (loss_unet_pred_x0 * 0.1)
                 
                 if not args.no_disc:
                     gen_latents = rearrange(model_pred, "b c t n m -> (b t) c n m")

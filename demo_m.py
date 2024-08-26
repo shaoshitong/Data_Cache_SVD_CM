@@ -24,7 +24,7 @@ def main():
     "a cat wearing sunglasses and working as a lifeguard at pool",
     "A dog in astronaut suit and sunglasses floating in space"
 ]
-    num_inference_steps = 2
+    num_inference_steps = 4
 
     model_id = "yhzhai/mcm"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -37,7 +37,7 @@ def main():
     import os
 
     lora = UNet3DConditionModel.from_pretrained(
-    "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_29/checkpoint-final",
+    "/home/shaoshitong/project/mcm/work_dirs/modelscopet2v_distillation_14/checkpoint-final",
     torch_device="cpu")
     unet = lora
     pipeline.unet = unet

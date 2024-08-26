@@ -28,9 +28,10 @@ class LISADiffusion:
         self.allowed_index = [j[0] for j in sorted(num_sort,key=lambda x:x[1],reverse=False)]
         self.probability = [1. for j in range(len(self.allowed_index))]
         for i, j in enumerate(self.allowed_index):
-            self.probability[j-1] = (0.999 ** i)
             if any([(module_key in name_sort[j-1]) for module_key in lisa_target_name]):
-                self.probability[j-1] *= 10.
+                self.probability[j-1] = (0.999 ** i)
+            else:
+                self.probability[j-1] = 0
         p_sum = sum(self.probability)
         self.probability = [j/p_sum for j in self.probability]
         self.initialize()
@@ -47,7 +48,7 @@ class LISADiffusion:
             if count == 0 or count == len(list(model.parameters()))-1:
                 if torch.distributed.get_rank() == 0:
                     print(f"Record {count}, Mean: {param.mean().item()}, Std: {param.std().item()}")
-                param.requires_grad = True
+                param.requires_grad = False
                 param.data = param.data.to(dtype=torch.float32)
             elif count in index:
                 param.requires_grad = True

@@ -418,7 +418,7 @@ def main(args):
         unet = lora
         print(f"Successfully load unet from {args.prev_train_unet}")
     
-    if args.prev_teacher_unet is not None and args.prev_train_unet != "None" and os.path.exists(args.prev_train_unet):
+    if args.prev_teacher_unet is not None and args.prev_teacher_unet != "None" and os.path.exists(args.prev_teacher_unet):
         teacher_unet = UNet3DConditionModel.from_pretrained(
         args.prev_teacher_unet,
         torch_device="cpu")
@@ -797,6 +797,7 @@ def main(args):
 
                 latents = latents * vae.config.scaling_factor
                 latents = latents.to(weight_dtype)
+                save_latents = latents
                 bsz = latents.shape[0]
 
                 # 2. Sample a random timestep for each image t_n from the ODE solver timesteps without bias.
@@ -927,10 +928,9 @@ def main(args):
                 store_dict["start_timesteps"] = start_timesteps
                 store_dict["timesteps"] = timesteps
                 store_dict["latents"] = rearrange(
-                    latents,
+                    save_latents,
                     "b c t h w -> (b t) c h w",
-                )[:4].to(weight_dtype) * vae.config.scaling_factor
-                
+                )
                 #######################################################################
                 ### NEED noisy_model_input, use_pred_x0, start_timesteps, timesteps ###
                 ### noisy_model_input shape: [1, 4, 16, 64, 64]                     ###

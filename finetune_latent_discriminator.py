@@ -91,6 +91,32 @@ def save_to_local(save_dir: str, prompt: str, video):
 
     export_to_video(video, os.path.join(save_dir, f"{prompt}.mp4"))
 
+def tsn_sample(num_frames: int, num_sel_frames: int) -> List[int]:
+    # Ensure that the input is valid
+    if num_sel_frames > num_frames:
+        raise ValueError("num_sel_frames must be less than or equal to num_frames")
+
+    # Create the list of numbers from 0 to num_frames - 1
+    frame_list = list(range(num_frames))
+
+    # Calculate the size of each sublist
+    sublist_size = num_frames // num_sel_frames
+
+    # Initialize the list for selected numbers
+    selected_numbers = []
+
+    # Loop through each sublist, select a random number, and add it to the selected_numbers list
+    for i in range(num_sel_frames):
+        # Determine the start and end index of the current sublist
+        start = i * sublist_size
+        # For the last sublist, extend to the end of the frame_list
+        end = start + sublist_size if i != num_sel_frames - 1 else num_frames
+
+        # Select a random number from the sublist
+        selected_number = random.choice(frame_list[start:end])
+        selected_numbers.append(selected_number)
+
+    return selected_numbers
 
 def tensor2vid(video: torch.Tensor, processor, output_type="np"):
     batch_size, channels, num_frames, height, width = video.shape
@@ -458,7 +484,8 @@ def main(args):
                 target = target.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
                 sd_prompt_embeds = sd_prompt_embeds.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
                 start_timesteps, timesteps = start_timesteps.squeeze(0), timesteps.squeeze(0)
-                   
+                real_data = real_data.to(device=accelerator.device, dtype=weight_dtype, non_blocking=True).squeeze(0)
+                
                 # 3. Get boundary scalings for start_timesteps and (end) timesteps.
                 c_skip_start, c_out_start = scalings_for_boundary_conditions(
                     start_timesteps, timestep_scaling=args.timestep_scaling_factor
@@ -477,33 +504,34 @@ def main(args):
 
                 with torch.no_grad():
                     gen_latents = target
-                    gen_latents = rearrange(gen_latents, "b c t h w -> (b t) c h w")[:8]
-                    gt_latent = inference_sd_model(prompt=text, 
-                                                    height=1024, 
-                                                    width=1024, 
-                                                    num_inference_steps=15, 
-                                                    guidance_scale=5).images[0] # latents=add_noise_model_input
-                    tmp = (trans(gt_latent).to(accelerator.device) * 2 - 1).unsqueeze(0)
-                    gt_latent = vae.config.scaling_factor * vae.encode(tmp).latent_dist.sample()
-                    # ori_gt_latent = video_vae.config.scaling_factor * video_vae.encode(tmp.float()).latent_dist.sample().half()
+                    gen_latents = rearrange(gen_latents, "b c t h w -> (b t) c h w")
+                    # tsn_sample(gen_latents.shape[0],8)
+                    # gt_latent = inference_sd_model(prompt=text, 
+                    #                                 height=1024, 
+                    #                                 width=1024, 
+                    #                                 num_inference_steps=15, 
+                    #                                 guidance_scale=5).images[0] # latents=add_noise_model_input
+                    # tmp = (trans(gt_latent).to(accelerator.device) * 2 - 1).unsqueeze(0)
+                    # gt_latent = vae.config.scaling_factor * vae.encode(tmp).latent_dist.sample()
+                    # # ori_gt_latent = video_vae.config.scaling_factor * video_vae.encode(tmp.float()).latent_dist.sample().half()
                     
-                    # tmp = vae.decode(gen_latents.float() / vae.config.scaling_factor, return_dict=False)[0]
-                    # ori_gen_latents = video_vae.config.scaling_factor * video_vae.encode(tmp).latent_dist.sample().half()
+                    # # tmp = vae.decode(gen_latents.float() / vae.config.scaling_factor, return_dict=False)[0]
+                    # # ori_gen_latents = video_vae.config.scaling_factor * video_vae.encode(tmp).latent_dist.sample().half()
 
-                    for i in range(0, 2, 1):
-                        gt_latents.append(gt_latent)
+                    # for i in range(0, 2, 1):
+                    #     gt_latents.append(gt_latent)
 
-                    gt_latent = inference_sd_model(prompt=text, 
-                                                    height=1024, 
-                                                    width=1024, 
-                                                    num_inference_steps=15, 
-                                                    guidance_scale=5).images[0] # latents=add_noise_model_input
-                    tmp = (trans(gt_latent).to(accelerator.device) * 2 - 1).unsqueeze(0)
-                    gt_latent = vae.config.scaling_factor * vae.encode(tmp).latent_dist.sample()
-                    # ori_gt_latent = video_vae.config.scaling_factor * video_vae.encode(tmp.float()).latent_dist.sample().half()
+                    # gt_latent = inference_sd_model(prompt=text, 
+                    #                                 height=1024, 
+                    #                                 width=1024, 
+                    #                                 num_inference_steps=15, 
+                    #                                 guidance_scale=5).images[0] # latents=add_noise_model_input
+                    # tmp = (trans(gt_latent).to(accelerator.device) * 2 - 1).unsqueeze(0)
+                    # gt_latent = vae.config.scaling_factor * vae.encode(tmp).latent_dist.sample()
+                    # # ori_gt_latent = video_vae.config.scaling_factor * video_vae.encode(tmp.float()).latent_dist.sample().half()
 
-                    for i in range(0, 2, 1):
-                        gt_latents.append(gt_latent)
+                    # for i in range(0, 2, 1):
+                    #     gt_latents.append(gt_latent)
 
                     gt_latents.append(real_data)
                     gt_latents = torch.cat(gt_latents, dim=0)
@@ -513,11 +541,8 @@ def main(args):
                     # ori_gt_latents = gt_latents
                     weight = 0.5
                     # if accelerator.is_main_process:
-                    #     print(gt_latents.dtype,gen_latents.dtype)
-                    #     save_image(video_vae, gt_latents.float(), "gt_latents.png")
-                    #     save_image(video_vae, gen_latents.float(), "gen_latents.png")
-                    #     save_image(vae, ori_gt_latents.float(), "ori_gt_latents.png")
-                    #     save_image(vae, ori_gen_latents.float(), "ori_gen_latents.png")
+                    #     print(gt_latents.shape,gt_latents.mean(), gen_latents.shape, gen_latents.mean())
+                    #     save_image(video_vae, real_data[:2].float(), "real_data.png")
 
                     index = torch.randint(
                         0, args.num_ddim_timesteps, (gt_latents.shape[0],), device=gt_latents.device
@@ -569,6 +594,7 @@ def main(args):
                                         
                 sd_prompt_embeds = sd_prompt_embeds.expand(gt_noisy.shape[0],-1,-1)
                 b1, b2 = gt_noisy.shape[0], gen_noisy.shape[0]
+                
                 disc_pred, align_loss = discriminator(torch.cat([gt_noisy, gen_noisy],0), 
                                           torch.cat([start_timesteps,start_timesteps],0), 
                                           torch.cat([sd_prompt_embeds, sd_prompt_embeds],0),
@@ -602,6 +628,8 @@ def main(args):
                     raise ValueError(
                         f"Discriminator loss type {args.disc_loss_type} not supported."
                     )
+                    
+                            
                 loss_disc_total = loss_disc_gt + loss_disc_gen + align_loss
                 accelerator.backward(loss_disc_total)
                 loss_dict["loss_disc_gt"] = loss_disc_gt
@@ -610,6 +638,7 @@ def main(args):
                 loss_dict["loss_disc_total"] = loss_disc_total
                 if accelerator.sync_gradients and args.max_grad_norm > 0:
                     accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
+                            
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)

@@ -46,5 +46,3 @@ accelerate launch --num_machines 1 --num_processes $GPUS \
     --web-dataset-begin $BEGIN \
     --prev_train_unet $PREV_TRAIN_UNET \
     --prev_teacher_unet $PREV_TEACHER_UNET
-
-# 1.49, 1.97

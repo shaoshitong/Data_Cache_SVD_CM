@@ -1,6 +1,7 @@
 from diffusers import UNet2DConditionModel, UNet3DConditionModel
 import torch.nn as nn
 import torch
+import einops
 from typing import Union
 import torch.nn.functional as F
 
@@ -122,6 +123,7 @@ class Discriminator(nn.Module):
         # nn.Conv2d(self.unet.conv_in.out_channels, self.unet.conv_in.out_channels, (3,3),(1,1),(1,1),bias=False)
         self.trans_conv = self.unet.trans_conv
         self.heads = []
+        self.temperal_heads = []
         if is_multiscale:
             channel_list = [320, 640, 1280]
         else:
@@ -134,11 +136,21 @@ class Discriminator(nn.Module):
                                             nn.Conv2d(feat_c//4,1,1,1,0)
                                             ))
         self.heads = nn.ModuleList(self.heads)
+        
+        for feat_c in channel_list:
+            self.temperal_heads.append(nn.Sequential(nn.GroupNorm(32, feat_c, eps=1e-05, affine=True),
+                                            nn.utils.spectral_norm(nn.Conv3d(feat_c, feat_c//4, (16, 4, 4), (1, 2, 2), (0, 2, 2))),
+                                            nn.SiLU(),
+                                            nn.utils.spectral_norm(nn.Conv3d(feat_c//4,1,(1, 1, 1), (1, 1, 1), (0, 0, 0)))
+                                            ))
+        self.temperal_heads = nn.ModuleList(self.temperal_heads)
+        
         if type == "modelscope":
             self.dis = nn.Linear(379, 1)
+            self.dis2 = nn.Linear(379, 1)
         else:
             self.dis = nn.Linear(1403, 1)
-
+            self.dis2 = nn.Linear(1403, 1)
     
     
     def forward(self, latent, timesteps, encoder_hidden_states, ori_sample=None):
@@ -150,16 +162,30 @@ class Discriminator(nn.Module):
             with torch.no_grad():
                 feat_list = self.unet.forward(self.unet, latent, timesteps, encoder_hidden_states, is_multiscale=self.is_multiscale, is_training=self.is_training)
         res_list = []
-        for cur_feat, cur_head in zip(feat_list, self.heads):
-            cur_out = cur_head(cur_feat.float())
+        res_t_list = []
+        for cur_feat, cur_head, cur_t_head in zip(feat_list, self.heads, self.temperal_heads):
+            cur_feat = cur_feat.float()
+            if self.is_training:
+                cur_feat_1, cur_feat_2 = torch.split(cur_feat,[cur_feat.shape[0]//2, cur_feat.shape[0]//2],dim=0)
+                cur_feat_1 = cur_t_head(einops.rearrange(cur_feat_1,"(b t) c h w -> b c t h w", t=16))
+                cur_feat_2 = cur_t_head(einops.rearrange(cur_feat_2,"(b t) c h w -> b c t h w", t=16))
+                cur_t_out = torch.cat([cur_feat_1,cur_feat_2],0)
+            else:
+                cur_t_out = cur_t_head(einops.rearrange(cur_feat,"(b t) c h w -> b c t h w", t=16))
+            res_t_list.append(cur_t_out.reshape(cur_t_out.shape[0], -1))
+            cur_out = cur_head(cur_feat)
             res_list.append(cur_out.reshape(cur_out.shape[0], -1))
         
         concat_res = torch.cat(res_list, dim=1)
+        concat_t_res = torch.cat(res_t_list, dim=1)
         dis_logit = self.dis(concat_res)
+        dis_t_logit = self.dis2(concat_t_res)
+        dis_t_logit = einops.rearrange(dis_t_logit.unsqueeze(1).expand(-1, 16, -1), "b t c -> (b t) c")
+        
         if self.is_training:
-            return dis_logit, align_loss
+            return dis_logit + dis_t_logit, align_loss
         else:
-            return dis_logit
+            return dis_logit + dis_t_logit
 
 
     def save_pretrained(self, path):
@@ -258,6 +284,7 @@ class VideoDiscriminator(nn.Module):
         torch.cuda.empty_cache()
         
         self.heads = []
+        self.temperal_heads = []
         if is_multiscale:
             channel_list = [320, 640, 1280]
         else:
@@ -265,28 +292,49 @@ class VideoDiscriminator(nn.Module):
 
         for feat_c in channel_list:
             self.heads.append(nn.Sequential(nn.GroupNorm(32, feat_c, eps=1e-05, affine=True),
-                                            nn.Conv2d(feat_c, feat_c//4, 4, 2, 2),
+                                            nn.utils.spectral_norm(nn.Conv2d(feat_c, feat_c//4, 4, 2, 2)),
                                             nn.SiLU(),
-                                            nn.Conv2d(feat_c//4,1,1,1,0)
+                                            nn.utils.spectral_norm(nn.Conv2d(feat_c//4,1,1,1,0))
                                             ))
         self.heads = nn.ModuleList(self.heads)
+        
+        for feat_c in channel_list:
+            self.temperal_heads.append(nn.Sequential(nn.GroupNorm(32, feat_c, eps=1e-05, affine=True),
+                                            nn.utils.spectral_norm(nn.Conv3d(feat_c, feat_c//4, (16, 4, 4), (1, 2, 2), (0, 2, 2))),
+                                            nn.SiLU(),
+                                            nn.utils.spectral_norm(nn.Conv3d(feat_c//4,1,(1, 1, 1), (1, 1, 1), (0, 0, 0)))
+                                            ))
+        self.temperal_heads = nn.ModuleList(self.temperal_heads)
+        
         if type == "modelscope":
             self.dis = nn.Linear(379, 1)
+            self.dis2 = nn.Linear(379, 1)
         else:
             self.dis = nn.Linear(1403, 1)
-
+            self.dis2 = nn.Linear(1403, 1)
         
     def forward(self, latent, timesteps, encoder_hidden_states):
         with torch.no_grad():
             feat_list = self.unet.forward(self.unet, latent, timesteps, encoder_hidden_states, is_multiscale=self.is_multiscale)
         res_list = []
-        for cur_feat, cur_head in zip(feat_list, self.heads):
-            cur_out = cur_head(cur_feat.float())
+        res_t_list = []
+        for cur_feat, cur_head, cur_t_head in zip(feat_list, self.heads, self.temperal_heads):
+            cur_feat = cur_feat.float()
+            cur_feat_1, cur_feat_2 = torch.split(cur_feat,[cur_feat.shape[0]//2, cur_feat.shape[0]//2],dim=0)
+            cur_feat_1 = cur_t_head(einops.rearrange(cur_feat_1,"(b t) c h w -> b c t h w", t=16))
+            cur_feat_2 = cur_t_head(einops.rearrange(cur_feat_2,"(b t) c h w -> b c t h w", t=16))
+            cur_t_out = torch.cat([cur_feat_1,cur_feat_2],0)
+            res_t_list.append(cur_t_out.reshape(cur_t_out.shape[0], -1))
+            cur_out = cur_head(cur_feat)
+            print(cur_t_out.shape,res_t_list[-1].shape)
             res_list.append(cur_out.reshape(cur_out.shape[0], -1))
         
         concat_res = torch.cat(res_list, dim=1)
+        concat_t_res = torch.cat(res_t_list, dim=1)
         dis_logit = self.dis(concat_res)
-        return dis_logit
+        dis_t_logit = self.dis2(concat_t_res)
+        dis_t_logit = einops.rearrange(dis_t_logit.unsqueeze(1).expand(-1, 16, -1), "b t c -> (b t) c")
+        return dis_logit + dis_t_logit
 
 
     def save_pretrained(self, path):
